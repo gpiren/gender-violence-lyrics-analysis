@@ -36,7 +36,7 @@ german_hiphop_rap_artists <- artists %>%
   filter(grepl("german hip hop|deutschrap|hip hop deutsch|german rap|deutscher rap|pop rap|urban deutsch", 
                genres, ignore.case = TRUE)) %>% 
   arrange(desc(popularity)) %>%
-  head(10)  # Get the top 10 most popular German hip hop & rap artists
+  head(5)  # Get the top 10 most popular German hip hop & rap artists
 
 # Display results
 print("🇩🇪 Top 10 German Hip Hop & Rap Artists (including urban & pop rap):")
@@ -46,10 +46,50 @@ print(german_hiphop_rap_artists)
 
 ```
 
-## Including Plots
+## top 3 german songs by artist (old version)
 
 ```{r pressure, echo=FALSE}
-plot(pressure)
+# Load required libraries
+library(spotifyr)
+library(dplyr)
+library(purrr)
+library(tidyr)
+
+# Authenticate Spotify API
+Sys.setenv(SPOTIFY_CLIENT_ID = "your_client_id_here")
+Sys.setenv(SPOTIFY_CLIENT_SECRET = "your_client_secret_here")
+
+# Retrieve Access Token
+access_token <- get_spotify_access_token()
+
+# 🔹 Search for German Hip Hop & Rap Artists
+artists <- search_spotify("german hip hop|deutschrap|hip hop deutsch|german rap|deutscher rap|pop rap|urban deutsch", 
+                          type = "artist", limit = 50, authorization = access_token)
+
+# 🔹 Ensure IDs are included
+top_artists <- artists %>%
+  select(id, name, genres, popularity) %>%
+  filter(sapply(genres, function(genre_list) 
+    any(grepl("german hip hop|deutschrap|hip hop deutsch|german rap|deutscher rap|pop rap|urban deutsch", 
+              genre_list, ignore.case = TRUE)))) %>%
+  arrange(desc(popularity)) %>%
+  head(5)  # Get the top 5 most popular German hip hop & rap artists
+
+# 🔹 Get top 3 tracks per artist
+
+top_artists <- top_artists %>%
+  mutate(top_tracks = map(id, ~ get_artist_top_tracks(.x, market = "DE", authorization = access_token))) %>%  # Fetch tracks
+  mutate(top_tracks = map(top_tracks, ~ head(.x, 3)))  # Keep only top 3 tracks
+
+# 🔹 Unnest tracks to create a long format data frame
+tracks_long <- top_artists %>%
+  mutate(artist_name = name) %>%  # Preserve artist name
+  unnest(cols = top_tracks, names_sep = "_") %>%  # Unnest nested data
+  select(artist_name, track_name = top_tracks_name)  # Select relevant columns
+
+# 🔹 Display results
+print("🎶 Top 3 Songs for Each of the Top 5 German Hip Hop & Rap Artists:")
+print(tracks_long)
 ```
 
 
