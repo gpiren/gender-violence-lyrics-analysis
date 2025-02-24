@@ -9,17 +9,44 @@ knitr::opts_chunk$set(echo = TRUE)
 test123
 ```
 
-## R Markdown
-
-
+## Libraries
 
 ```{r cars}
-summary(cars)
+library(spotifyr)
+library(dplyr)
+```
+
+
+## Accessing top 10 Artists in Germany 
+
+```{r cars}
+# Authenticate Spotify API
+Sys.setenv(SPOTIFY_CLIENT_ID = "94dfa922c1594dceab2e83b4566f36ec")
+Sys.setenv(SPOTIFY_CLIENT_SECRET = "d3f1d099d4294020a02e6a191a08c9a2")
+
+# Retrieve Access Token
+access_token <- get_spotify_access_token()
+
+# 🔹 Search for German Hip Hop & Rap Artists
+artists <- search_spotify("german hip hop|deutschrap|hip hop deutsch|german rap|deutscher rap|pop rap|urban deutsch", type = "artist", limit = 50, authorization = access_token)
+
+# 🔹 Expanded filter to include more genres
+german_hiphop_rap_artists <- artists %>%
+  select(name, genres, popularity) %>%
+  filter(grepl("german hip hop|deutschrap|hip hop deutsch|german rap|deutscher rap|pop rap|urban deutsch", 
+               genres, ignore.case = TRUE)) %>% 
+  arrange(desc(popularity)) %>%
+  head(10)  # Get the top 10 most popular German hip hop & rap artists
+
+# Display results
+print("🇩🇪 Top 10 German Hip Hop & Rap Artists (including urban & pop rap):")
+
+print(german_hiphop_rap_artists)
+
+
 ```
 
 ## Including Plots
-
-
 
 ```{r pressure, echo=FALSE}
 plot(pressure)
