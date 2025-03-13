@@ -1,0 +1,1028 @@
+---
+title: "Music Harvesting"
+author: "Álvaro Sanz, Alejandro Aísa"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Introduction
+
+Music nowadays is probably one of the most profitable industries in the world; almost everyone listens to music, whether it is while driving, when doing exercise, or just lying in bed. This popularity of music has induced to the development huge number of genres, each one with their own style and characteristics. Similarly, the development of the telecommunication technologies in the last couples of decades has made possible that the channels for listening to music change over time. We are not any more confined to CDs and radio. Streaming platforms like Spotify or Video platforms like YouTube are considered nowadays the most important ones for the industry.
+
+Therefore, the main objective of this work would be to analyse the differences in music. Using the Spotify Web API as a reference, we will try to analise the differences in popularity, genres or characteristics. In this line of reasoning, we also want to offer the user this scraper as a tool for users to visualize these mentioned global trends, which are the most popular songs and what characteristics do they have.
+
+First of all, these are the libraries we'll use:
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(httr2)
+library(httr)
+library(ggplot2)
+library(jsonlite)
+library(xml2)
+library(stringr)
+library(stringdist)
+library(stargazer)
+library(plotly)
+```
+
+Before running the code, please make sure they are all installed in your computer.
+
+## Setting the Spotify API Credentials
+
+### Creating the account and the app for developers.
+
+As explained in the repository's description, the first necessary condition for obtaining the credentials for using the Spotify Web API is having a valid account for the [application](https://www.spotify.com).
+
+Once we have our account, we are ready to register an app within the [Spotify for developers](https://developer.spotify.com/dashboard/login), by clicking in the 'create an app' button, and provide a name for the app and a description. The purpose of creating this app is obtaining two central things: the *client ID* and the *client secret*.
+
+The last step is to create two different .txt files, with this names:
+
+-   *client_id.txt*
+-   *client_secret.txt*
+
+Please note where this files are located, as it's necessary for the next chunk.
+
+### Client ID and Client Secret
+
+Once we have created our account and our Spotify App for developers, we will have to look for our Client ID and Client Secret. They are shown in the dashboard of the App:
+
+```{r}
+client_id <- "56ecfce3442443899ca589a65c224221"
+```
+
+```{r}
+client_secret <- "31f433d8f2244e469ef30152dfbb9b19"
+```
+
+### Creating the personal OAuth 2.0 token for requests
+
+Once we have our client id and our Client Secret, all we have to do is to make a request to the API to obtain the token that would allow us to perform future requests. As a note, this request would be done with httr library, instead of hhtr2. Therefore:
+
+```{r}
+token_req <- POST(
+  "https://accounts.spotify.com/api/token",
+  accept_json(),
+  authenticate(client_ID, client_secret), 
+  body = list(grant_type = 'client_credentials'),
+  encode = 'form',
+  verbose())
+```
+
+Once the request is done, we will need to extract the token from the body of the response, and store it in the environment.
+
+```{r}
+mytoken <- content(token_req)$access_token
+#HeaderValue <- paste0("Bearer ", mytoken)
+```
+
+## The Data Harvesting process
+
+### Step 0: setting the base request.
+
+The first task that we should is to define the base URL for future requests. As the endpoints within the API do not possess required fields\*, we would be able to construct the queries based on the following URL:
+
+```{r}
+spo_gen <- "https://api.spotify.com/v1"
+```
+
+Similarly, for practical purposes, we will define now the structure of the request. First, we add the `request` function of `HTTR2` package with the base URL. Then, we provide the token as a personal identification. Finally, as we would not like to perform many requests in a small fraction of time, we include `throttle` between each one and a `timeout` and `retry` in case something fails.
+
+```{r}
+req <- request(spo_gen) %>% 
+  req_auth_bearer_token(mytoken) %>% 
+  req_retry(max_tries = 3) %>% 
+  req_options(timeout_ms = 10000) %>% 
+  req_throttle(rate = 45 / 60)
+```
+
+### 1. Comparing songs in the Global Top 50.
+
+The first request that we'll perform to the Spotify Web API involves the playlist with the 50 top global songs, updated in a weekly basis. As an introductory note, each playlist, author or track has their own ID, which in URL terms is composed by a series of numbers and letters. You can check this ID in the Spotify player, by selecting a song, playlist, album or artist and right-clicking, selecting 'share' and then the option to copy the link.
+
+For example, let's take a look at the link for the Global Top 50:
+
+<https://open.spotify.com/playlist/37i9dQZEVXbMDoHDwVN2tF?si=aad5983bb44341f8>
+
+The ID we want is all text contained after /playlist/, in this case, and before the equal sign. So let's bring it into R:
+
+```{r}
+top50global <- "37i9dQZEVXbNG2KDcFcKOF?si"
+```
+
+Thus, the request is done via the req function defined before. After the request is defines, using the req_url_path_append function we paste the endpoint necessary and the id. Finally, all we have to do is to perform the request and ask for JSON string as the body of the response. Notice here the simplifyVector = T in order to get the key:value pairs stored as dataframes. This structure of the request would be standardized over the following analysis.
+
+Now that we have into the environment, we'll use our base request and add some more arguments to get the information on all tracks of the Top 50 Global playlist.
+
+-   With `req_url_path_append`, we tell the request that the endpoint we're looking for is the playlists one, later adding to it the ID of our playlist, separated by a `/`.
+
+-   With `req_perform`, we run the request and download the info we want.
+
+-   With `resp_body_json` we store that info into our variable called `top50`.
+
+```{r}
+top50 <- req %>% 
+  req_url_path_append(paste("playlists", top50global, sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = T)
+
+top50
+```
+
+Even with the help of `simplifyVector = T` we obtained a large list. By looking at it, we notice that the info we're searching is on the tracks\$items element. Therefore, the main strategy to follow is to unnest the information embedded in this structure. Luckily, we know exactly which value are we looking for, so using the unnest strategy we may obtain the information we want: the names of the song, the duration, whether they are explicit...
+
+Using the unnest function, we are able to construct a dataframe out of the lists included in the track column. The resulting dataframe is also composed by list columns. Therefore, we would require to perform a second unnest function to finally obtain the desired dataframe with the information about each song of the top50 playlist:
+
+```{r}
+top50 <- top50$tracks$items
+
+top50
+
+```
+
+As we may see, now we have a dataframe with 50 rows, each for one song, and many different columns, some of them being also dataframes. For our objective, we only want information relative to the track itself, and not the thumbnail or who added it, so we'll select the `track` column and then unnest it, so that the information inside is shown.
+
+```{r}
+top50 <- top50 %>% 
+  select(track) %>% 
+  unnest(track) %>% 
+  select(c(album, artists, duration_ms, explicit, name, id, popularity)) 
+
+top50
+```
+
+Now we got information for each track, such as its name, ID, popularity, or the artists behind it. Again, we'll unnest the `artist` column to see the authors for each one (note that we need a `names_repair` argument, as some columns have the same name). Note that now we'll have more than 50 rows, as some songs are singed by more than one person or group (featurings).
+
+```{r}
+top50filtered <- top50 %>% unnest(artists, names_repair = "universal") %>% 
+  select(!c(external_urls, href, type, uri, album)) %>% 
+  rename("album_id" = "id...4", 
+         "track_name" = "name...10",
+         "track_id" = "id...11",
+         "artist" = "name...5")
+
+top50filtered
+```
+
+Through this endpoint, we got valuable information on each track, but we're looking for more depth. We already know that the Top 50 Global songs are popular and who their artists are, so let's take each song's ID and move to another endpoint.
+
+```{r}
+songs <- top50filtered$track_id
+```
+
+Now, we want the audio features for this song. Spotify includes information on some very nice indicators they construct, such as the instrumentalness, the danceability, the energy of the song... along with other more classical ones such as the tempo or the key. Let's look at an example for the first song of the Top 50:
+
+```{r}
+req %>% 
+  req_url_path_append(paste("audio-features", songs[1], sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = TRUE) %>% 
+  as_tibble()
+```
+
+Now, let's build a loop to extract all this variables for all songs in the top 50, and store them in a common dataframe:
+
+```{r}
+top50songs <- data.frame()
+
+for(i in 1:length(unique(songs))) { #We set the unique to avoid the features problem. 
+  
+  song <- req %>% 
+  req_url_path_append(paste("audio-features", unique(songs)[i], sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = TRUE) %>% 
+  as.tibble()
+  
+  top50songs <- rbind(song, top50songs)
+  
+} 
+
+top50songs
+```
+
+But now we don't have each song's name! They're only giving us info on its ID and other identificators. Let's reuse our previous information, to make each song identifiable.
+
+```{r}
+top50ids <- top50filtered %>% 
+  select(c(track_name, track_id)) %>% 
+  distinct(track_name, .keep_all = TRUE)
+```
+
+```{r}
+top50songs <- top50songs %>% 
+  rename("track_id" = "id")
+
+top50full <- top50songs %>% 
+  full_join(top50ids, by = "track_id") %>% 
+  select(c(track_name, danceability, energy, loudness, speechiness, acousticness, instrumentalness, liveness, valence, tempo, duration_ms))
+
+top50full
+```
+
+Great! Now we have all track names, each one with the variables we want.
+
+The tracks appear in inverse order respective to their position in the Top 50, so let's fix that and add that info, as well as some additional transformations:
+
+```{r}
+top50full <- top50full %>% 
+  arrange(desc(row_number())) %>% 
+  mutate(Position = row_number(),
+         duration_ms = duration_ms / 1000) %>% 
+  rename("duration" = "duration_ms")
+
+top50full
+```
+
+Time for the analysis! How do this 'internal' characteristics of the songs affect their position? Is there any pattern? Let's take a general view through a simple Poisson regression...
+
+```{r}
+pois <- glm(Position ~ danceability + energy + loudness + speechiness + acousticness + instrumentalness + liveness + valence + tempo + duration, family = poisson(), data = top50full)
+```
+
+```{r}
+poisson_plot <- function(model) {
+  coef_df <- data.frame(coef = coef(model), se = sqrt(diag(vcov(model))))
+  
+  ggplot(coef_df, aes(x = rownames(coef_df), y = coef)) +
+    geom_point() +
+    geom_errorbar(aes(ymin = coef - 1.96 * se, ymax = coef + 1.96 * se), width = 0.2) +
+    coord_flip() +
+    xlab("") +
+    ylab("Coefficient Estimate") +
+    labs(title = "Most important variables in a song's position") +
+    theme_minimal() +
+    theme(legend.text = element_text(family = "Helvetica"))
+}
+
+poisson_plot(pois)
+```
+
+As this values may change from one week to another, we won't comment much on them, apart from that in this week's Top 50 acousticness and speechiness seem to have a positive impact.
+
+Nonetheless, we think that plotting each variable may be much more useful, to graphically see if there are patterns or not:
+
+#### Danceability
+
+```{r}
+dance <- top50full %>% 
+  ggplot(aes(x=Position, y=danceability, color = danceability, text = paste0("Song: ", track_name))) +
+  geom_point() +
+  ylab("Danceability") +
+  xlab("Position in the TOP 50") +
+  scale_color_gradient(low = "darkblue", high = "orange") +
+  ylim(c(0.25, 1)) +
+  theme_light() +
+  labs(title = "If I can't dance...",
+       color = "Danceability") +
+  theme(text = element_text(family = "Helvetica"),
+        legend.text = element_text(family = "Helvetica"))
+
+ggplotly(dance, tooltip = c("text", "color")) %>% 
+  layout(annotations = list(
+  text = "Relationship between the Global position in the Top 50 songs and the degree of danceability of each one",
+  x = 0,
+  y = 1.05,
+  xref = "paper",
+  yref = "paper",
+  showarrow = FALSE
+))
+```
+
+#### Acousticness
+
+```{r}
+
+acoustic <- top50full %>% 
+  ggplot(aes(x=Position, y=acousticness, color = acousticness, text = paste0("Song: ", track_name))) +
+  geom_point() +
+  ylab("Speechiness") +
+  xlab("Position in the TOP 50") +
+  scale_color_gradient(low = "darkblue", high = "orange") +
+  ylim(c(0, 1)) +
+  theme_light() +
+  labs(title = "What about the acoustics?",
+       color = "Acousticness") +
+  theme(text = element_text(family = "Helvetica"),
+        legend.text = element_text(family = "Helvetica"))
+
+ggplotly(acoustic, tooltip = c("text", "color")) %>% 
+  layout(annotations = list(
+  text = "Relationship between the Global position in the Top 50 songs and the degree of acousticness of each one",
+  x = 0,
+  y = 1.05,
+  xref = "paper",
+  yref = "paper",
+  showarrow = FALSE
+))
+```
+
+#### Speechiness
+
+```{r}
+
+
+speech <- top50full %>% 
+  ggplot(aes(x=Position, y=speechiness, color = speechiness, text = paste0("Song: ", track_name))) +
+  geom_point() +
+  ylab("Speechiness") +
+  xlab("Position in the TOP 50") +
+  scale_color_gradient(low = "darkblue", high = "orange") +
+  ylim(c(0, 0.5)) +
+  theme_light() +
+  labs(title = "You left me wordless!",
+       color = "Speechiness") +
+  theme(text = element_text(family = "Helvetica"),
+        legend.text = element_text(family = "Helvetica"))
+
+ggplotly(speech, tooltip = c("text", "color")) %>% 
+  layout(annotations = list(
+  text = "Relationship between the Global position in the Top 50 songs and the density of words in each one",
+  x = 0,
+  y = 1.05,
+  xref = "paper",
+  yref = "paper",
+  showarrow = FALSE
+))
+```
+
+### 2. Comparing top songs of different countries
+
+We already compared the Top 50 Global songs between them, and it gave us valuable information. But, what about different geographical contexts? It's reasonable to think that some parameters may vary a lot from one country to another, so we'll run a similar analysis than the one conducted before, but taking as reference the Top songs for 2 different countries, in this case, Colombia and India. These are the IDs of their playlists:
+
+```{r}
+top50colombia <- "37i9dQZEVXbL1Fl8vdBUba"
+top50india <- "37i9dQZEVXbMWDif5SCBJq"
+```
+
+#### Colombia
+
+Again, using our base request, we'll run a very similar code, just changing the target.
+
+```{r}
+top50col <- req %>% 
+  req_url_path_append(paste("playlists", top50colombia, sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = T)
+
+top50col <- top50col$tracks$items %>% 
+  select(track) %>% 
+  unnest() %>% 
+  select(c(artists, explicit, duration_ms, name, id, popularity))
+
+colsongs <- top50col$id
+```
+
+Once we got all songs' names and IDs, let's run another loop to get the extensive information:
+
+```{r}
+top50colsongs <- data.frame()
+
+for(i in 1:length(unique(colsongs))) { #We set the unique to avoid the features problem. 
+  
+  song <- req %>% 
+  req_url_path_append(paste("audio-features", colsongs[i], sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = TRUE) %>% 
+  as.tibble()
+  
+  top50colsongs <- rbind(song, top50colsongs)
+  
+} 
+
+top50colsongs
+```
+
+```{r}
+top50col <- top50col %>% 
+  select(c(name, id))
+```
+
+One more time, let's join by songs' IDs and finish the dataframe:
+
+```{r}
+top50colfull <- top50col %>% 
+  full_join(top50colsongs, by = "id") %>% 
+  mutate(Position = row_number(),
+         playlist = "Colombia TOP 50") %>% 
+  select(c(name, Position, danceability, energy, key, loudness, speechiness, acousticness, instrumentalness, liveness, valence, tempo, duration_ms, playlist))
+
+top50colfull
+```
+
+#### India
+
+Now, let's repeat the same operation for the Indian context.
+
+```{r}
+top50ind <- req %>% 
+  req_url_path_append(paste("playlists", top50india, sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = T)
+
+top50ind <- top50ind$tracks$items %>% 
+  select(track) %>% 
+  unnest() %>% 
+  select(c(artists, explicit, duration_ms, name, id, popularity))
+
+indsongs <- top50ind$id
+```
+
+```{r}
+top50indsongs <- data.frame()
+
+for(i in 1:length(unique(indsongs))) { #We set the unique to avoid the features problem. 
+  
+  song <- req %>% 
+  req_url_path_append(paste("audio-features", indsongs[i], sep = "/")) %>% 
+  req_perform() %>% 
+  resp_body_json(simplifyVector = TRUE) %>% 
+  as.tibble()
+  
+  top50indsongs <- rbind(song, top50indsongs)
+  
+} 
+
+top50indsongs
+```
+
+```{r}
+top50ind <- top50ind %>% 
+  select(c(name, id))
+```
+
+```{r}
+top50indfull <- top50ind %>% 
+  full_join(top50indsongs, by = "id") %>% 
+  mutate(Position = row_number(), 
+         playlist = "India TOP 50") %>% 
+  select(c(name, Position, danceability, energy, key, loudness, speechiness, acousticness, instrumentalness, liveness, valence, tempo, duration_ms, playlist))
+
+top50indfull
+```
+
+Great! We now have 2 dataframes, one for each country, with the same variables. Notice we've created an additional one, with the playlist name for each, so that we're able to visualize the difference. Let's get to it!
+
+```{r}
+tracks2 <- rbind(top50colfull, top50indfull)
+```
+
+#### Danceability
+
+```{r}
+dance <- ggplot(tracks2, aes(x=danceability, fill=playlist,
+                    text = paste(playlist)))+
+  geom_density(alpha=0.7, color=NA)+
+  scale_fill_manual(values=c("violet", "darkblue"))+
+  labs(x="Danceability", y="Density") +
+  guides(fill=guide_legend(title="Playlist"))+
+  xlim(c(0.25,1)) +
+  theme(text = element_text(family = "Helvetica")) +
+  theme_minimal()+
+  labs(title = "Who dances more?")
+
+ggplotly(dance, tooltip=c("text")) %>% 
+  layout(annotations = list(
+    text = "How are each countries' songs in terms of danceability?",
+    x = 0,
+    y = 1.05,
+    xref = "paper",
+    yref = "paper",
+    showarrow = FALSE
+  ))
+```
+
+#### Valence
+
+```{r}
+positive <- ggplot(tracks2, aes(x=valence, fill=playlist,
+                    text = paste(playlist)))+
+  geom_density(alpha=0.7, color=NA)+
+  scale_fill_manual(values=c("violet", "darkblue"))+
+  labs(x="Valence", y="Density") +
+  guides(fill=guide_legend(title="Playlist"))+
+  xlim(c(0.25,1)) +
+  theme(text = element_text(family = "Helvetica")) +
+  theme_minimal()+
+  labs(title = "What a wonderful... song?")
+
+ggplotly(positive, tooltip=c("text")) %>% 
+  layout(annotations = list(
+    text = "Distribution of songs in terms of positiveness of the songs",
+    x = 0,
+    y = 1.05,
+    xref = "paper",
+    yref = "paper",
+    showarrow = FALSE
+  ))
+```
+
+#### Speechiness
+
+```{r}
+speech <- ggplot(tracks2, aes(x=speechiness, fill=playlist,
+                    text = paste(playlist)))+
+  geom_density(alpha=0.7, color=NA)+
+  scale_fill_manual(values=c("violet", "darkblue"))+
+  labs(x="Valence", y="Density") +
+  guides(fill=guide_legend(title="Playlist"))+
+  xlim(c(0,0.5)) +
+  theme(text = element_text(family = "Helvetica")) +
+  theme_minimal()+
+  labs(title = "Who talks more?")
+
+ggplotly(speech, tooltip=c("text")) %>% 
+  layout(annotations = list(
+    text = "Distribution of songs in terms of density of words",
+    x = 0,
+    y = 1.05,
+    xref = "paper",
+    yref = "paper",
+    showarrow = FALSE
+  ))
+```
+
+### 3. Comparing TOP 50s: Spotify Vs. Billboard
+
+When talking about the top charts and the most recognized tracks among the world, we may think in many different pages or sites where to look. In this scraper we've only used Tops offered by Spotify, but... Is there more beyond this platform? Our objective is to compare the top offered by Spotify with the Top presented by Billboard, another very important musical reference worldwide, to observe potential variations between both of them. Is there homogeneity on their classifications? Which artists are most penalized from one to another?
+
+First, let's get into the environment the chart we're looking for: The Global Top 200 songs.
+
+```{r}
+billboard <- "https://www.billboard.com/charts/billboard-global-200/"
+browseURL(billboard)
+```
+
+Through `read_html` and `xml_child`, we also save the HTML code of the page, so we can search for the elements we need.
+
+```{r}
+billboard_raw <- read_html(billboard) %>% 
+  xml_child()
+```
+
+The first thing we need from the website is the list of the songs, ordered. Looking at the page, we notice that every text element containing the songs' names is located at this XPath and contains this attribute:
+
+```{r}
+bill200 <- billboard_raw %>%
+  xml_find_all("//li/ul/li/h3[@id = 'title-of-a-story']")
+
+bill200
+```
+
+As we can see, the resulting nodeset is made up by 200 elements, which makes sense as the chart is 200 songs long. Let's look at them:
+
+```{r}
+bill200[1] %>% 
+  xml_text()
+```
+
+The actual name of the song is 'trapped' between all those characters, so let's remove them to leave only what we want.
+
+```{r}
+billfilter <- bill200[1:50] %>% 
+  xml_text() %>% 
+  str_remove_all("\t|\n")
+  
+billfilter
+```
+
+That's it! We got all songs. Now let's do the same for the artists:
+
+```{r}
+bill200art <- billboard_raw %>%
+  xml_find_all("//li/ul/li/span[contains(@class, 'c-label  a-no-trucate a-font-primary')]")
+```
+
+```{r}
+billfilterart <- bill200art[1:50] %>% 
+  xml_text() %>% 
+  str_remove_all("\t|\n")
+
+billfilterart
+```
+
+Now, let's merge songs and artists, specifying the position of each song...
+
+```{r}
+top50billboard <- billfilter %>% 
+  as.data.frame() %>% 
+  cbind(as.data.frame(billfilterart)) %>% 
+  rename("track_name" = ".",
+         "artist" = "billfilterart") %>% 
+  mutate(`Billboard Position` = row_number())
+
+top50billboard
+```
+
+... and take the positions from the Spotify Global 50 too:
+
+```{r}
+top50positions <- top50filtered %>% 
+  select(c(artist, track_name)) %>% 
+  distinct(track_name, .keep_all = TRUE) %>% 
+  mutate(`Spotify Position` = row_number())
+
+top50positions
+```
+
+```{r}
+top50billboard %>% 
+  full_join(top50positions, by = c("artist"))
+```
+
+Problem! There are some songs' names that differ slightly from one page to another. How can we fix this? We will use the `stringdist` function, which 'links' the most similar strings into a single observation.
+
+First, let's transform the names to make it easier for the tool. We will make all of them lower cased and we'll remove some annotations the Billboard's page makes, regarding to featurings and collaborations, along with anything that is not alphanumeric:
+
+```{r}
+top50positions <- top50positions %>% 
+  mutate(track_name = tolower(track_name),
+         track_name = str_replace_all(track_name, "[^[:alnum:][:space:]]", ""),
+         track_name = str_remove_all(track_name, "feat .*|with .*"))
+
+top50billboard <- top50billboard %>% 
+  mutate(track_name = tolower(track_name),
+         track_name = str_replace_all(track_name, "[^[:alnum:][:space:]]", ""),
+         track_name = str_remove_all(track_name, "feat .*|with .*"))
+```
+
+Once that's done, we will create an empty column, `Track_match`, so that we make a simple loop in which every song tries to get a correspondence from the other dataframe, through the `amatch` function.
+
+```{r}
+top50billboard$Track_match <- NA
+top50positions$Track_match <- NA
+
+# Loop to find the closest match in the other dataframe, with a maximum distance of 6 characters. 
+for (i in 1:nrow(top50billboard)) {
+  match_index <- amatch(top50billboard$track_name[i], top50positions$track_name, maxDist = 6)
+  if (!is.na(match_index)) {
+    top50billboard$Track_match[i] <- top50positions$track_name[match_index]
+  }
+}
+
+for (i in 1:nrow(top50positions)) {
+  match_index <- amatch(top50positions$track_name[i], top50billboard$track_name, maxDist = 6)
+  if (!is.na(match_index)) {
+    top50positions$Track_match[i] <- top50billboard$track_name[match_index]
+  }
+}
+
+
+```
+
+Let's take a look at the result: we now have a column named Track_match which contains the 'common' name of each song, so that both dataframes have the same.
+
+```{r}
+top50billboard
+```
+
+Now that we've addressed this problem, it's possible for us to join both dataframes:
+
+```{r}
+df_join <- top50billboard %>% 
+  na.omit() %>% 
+  full_join(top50positions, by = "Track_match") %>% 
+  na.omit() %>% 
+  distinct(Track_match, .keep_all = TRUE)
+
+df_join
+```
+
+And creating some columns that reflect the difference between one ranking and another, in order to create a nice visualization.
+
+```{r}
+comparison <- df_join %>% 
+  select(c(artist.x, `Spotify Position`, `Billboard Position`, Track_match)) %>% 
+  distinct(Track_match, .keep_all = TRUE) %>% 
+  mutate(Difference = `Spotify Position` - `Billboard Position`,
+         reference = 0, 
+         value = ifelse(Difference > 0, "Positive", ifelse(Difference == 0, "Neutral", "Negative"))) %>% 
+  rename("Artist" = "artist.x")
+
+comparison
+```
+
+Which are the most penalized songs in comparison?
+
+```{r, fig.height=6}
+my_colors <- c("Positive" = "darkgreen", "Neutral" = "gray", "Negative" = "red")
+
+compviz <- comparison %>% 
+  na.omit() %>% 
+  ggplot(aes(y = reorder(Track_match, -`Spotify Position`), x=reference, color = value)) +
+  geom_segment(aes(xend=Difference, yend = Track_match, text = Artist)) + 
+  xlim(c(-40, 40)) + 
+  xlab("Positions lost/gained in Billboard") +
+  ylab("Tracks by Spotify Position") +
+  theme_minimal() +
+  theme(text = element_text(family = "Helvetica"), 
+        panel.grid.minor.x = element_blank()) + 
+  scale_color_manual(values = my_colors) +
+  geom_point(aes(x= Difference, y=Track_match, text = Artist))
+  
+ggplotly(compviz, tooltip=c("Difference", "Artist"))
+```
+
+### 4. Comparing music across time
+
+#### 4.1. All out X0s
+
+When comparing historic music, we will first resort to the Spotify-made playlists for the most famous songs of each decade (60s to 10s). In order to perform this specific request, we will need the specific URI for playlists and the particular IDs from each of them. Let's gather them:
+
+##### Playlists IDs
+
+```{r}
+tens <-  "37i9dQZF1DX5Ejj0EkURtP" 
+zeros <- "37i9dQZF1DX4o1oenSJRJd"
+nineties <-  "37i9dQZF1DXbTxeAdrVG2l" 
+eighties <-  "37i9dQZF1DX4UtSsGT1Sbe"
+seventies <- "37i9dQZF1DWTJ7xPn4vNaz" 
+sixties <- "37i9dQZF1DXaKIA8E7WcJj"
+```
+
+For this particular case, we have selected 6 different playlists, one for each decade since the 60s. In order to study their *importance* for listeners nowadays, we will look for the number of followers that each of them posses. This figure accounts for the number of people that have stored and downloaded the playlists in their own account. Thus, we may assume this number as a proxy for popularity.
+
+##### Custom function for extracting followers
+
+As the data is nested in a JSON within the body of the response we will need to apply again some techniques to read the data into a dataframe. However, contrary to previous points, we will use a function to extract the information in a single step. This custom function will perform the following tasks:
+
+-   In the first place, we will create the specific URI for each playlist, via `req_url_path_append`.
+-   Secondly, we will perform the request, providing the personal token.
+-   Next, we will create a dataframe with a column list, for the information provided in the response. Within that dataframe, we will select only the row that contains information about the followers. Then, we will unnest this column to create a new dataframe.
+-   The new dataframe for followers contains a list with two values; a NULL and the actual figure. Then, we need to filter out the first and select and rename the columns that pertain to our query.
+-   We repeat the previous step for the node that contains the information of the name of the playlist. Luckily, this time the node only contains such name, so the `unnest` function serves to create a new one-row dataframe. Lastly, we change the name of the column for practical purposes.
+
+```{r}
+
+followers <- function(x) { 
+
+  resp_output <- 
+    req %>% 
+    req_url_path_append(paste("playlists", x, sep = "/")) %>% 
+    req_auth_bearer_token(mytoken) %>% # Providing the token
+    req_perform() %>% # Performing the request
+    resp_body_json() # Obtaining the response body as a JSON file 
+  
+  resp_followers <- 
+    resp_output %>% 
+    enframe() %>% # Creating the column-list dataframe
+    filter(name == "followers") %>% # selecting only the followers node
+    unnest(cols = value) %>% # creating the dataframe
+    filter(!value == "NULL") %>% # filtering out NULL row 
+    select(-name) %>% # Selecting and renaming 
+    rename("followers" = "value")
+  
+  resp_name <- resp_output %>% 
+    enframe() %>% # Creating column-list
+    filter(name == "name") %>% # Filtering for the name of the playlist
+    unnest(cols = value) %>% # Creating the dataframe 
+    select(-name) %>% 
+    rename("playlist" = "value")
+    
+  df <- cbind(resp_name, resp_followers) # Merging 
+}
+```
+
+Once we have defined our custom function, we will use the `lapply` function to create a loop that would go over each individual playlist and extract the information. Then, thanks to the do.call function, we will merge all the figures into a single data frame.
+
+```{r}
+years <- c(sixties, seventies, eighties, nineties, zeros, tens)
+
+followers_list <- lapply(years, followers) 
+followers_df <- do.call(rbind, followers_list) %>% transmute(
+    playlist = as.character(playlist), 
+    followers = as.numeric(followers))
+
+followers_df
+```
+
+##### Plotting the number of followers of each decade playlist.
+
+As we have now the data stored in a dataframe, we can easily plot it:
+
+```{r}
+followers_df$playlist <- factor(followers_df$playlist, levels = c("All Out 60s", "All Out 70s", "All Out 80s", "All Out 90s", "All Out 2000s", "All Out 2010s"))
+#options(scipen = )
+
+hp <- ggplot(followers_df)+
+  aes(playlist, followers)+
+  geom_col(aes(fill = playlist)) + 
+  theme_minimal() +
+  guides(fill = "none") +
+  scale_y_continuous(labels = scales::number_format(scale = 1, big.mark = ",", suffix = " ")) +
+  labs(y = "Number of followers", 
+       x = "Playlist")
+
+hp
+```
+
+As we can see in the plot above, the first two decades do not hase subtantial number of followers compare to the others. On the contrary, the 80s and the 00s stands out. As a brief analysis, we may assess that nostalgia is playing a part. \#### 4.2. Comparing music features on historic music
+
+Similarly, we may create a custom function that enables us to obtain different musical features of different songs. Spotify indexes different characteristics for each song, such as the danceability, the energy or the tempo, the ones we previously used. Same as before, we could compare songs/artists from nowadays to older ones, according to this features.
+
+Then, we have selected the most liked song (in Spotify) from twelve artists, one men and one female, from each decade (60s to 10s). For function's purposes, we will store them already in a vector. Also, we will store the particular URI for the tracks' endpoint. Their IDs in Spotify are the following:
+
+```{r}
+Rihanna <- "49FYlytm3dAAraYgpoJZux"
+Drake <- "1zi7xx7UVEFkmKfv06H8x0"
+Eminem <- "1v7L65Lzy0j0vdpRjJewt1"
+LadyGaga <- "1QV6tiMFM6fSOKOGLMHYYg"
+MichaelJackson <- "3S2R0EVwBSAVMd5UMgKTL0"
+Madonna <- "22sLuJYcvZOSoLLRYev1s5"
+Queen <- "3z8h0TU7ReDPLIbEnYhWZb"
+Abba <- "0GjEhVFGZW8afUYGChu3Rr"
+RollingStones <- "63T7DJ1AFDD6Bn8VzG6JE8"
+WhitneyHouston <- "2tUBqZG2AbRi7Q0BIrVrEj"
+TheBeatles <- "6dGnYIeXmHdcikdzNNDMm2"
+Cher <- "2goLsvvODILDzeeiT4dAoR"
+
+artists <- c(Rihanna, Drake, Eminem, LadyGaga, 
+            MichaelJackson, Madonna, Queen, Abba, 
+            RollingStones, WhitneyHouston, TheBeatles, Cher,
+            TheBeatles, Cher)
+```
+
+##### Custom function
+
+The JSON returned in the request of the features is less nested. Therefore, the function is simpler. Similarly, we may use `simplifyVector = T` and `as.tibble` to have the key:value already stored as dataframes. Thus, the function will bear the request URI, the OAuth token and the storing specificities.
+
+```{r}
+features <- function(x) {
+
+  req <- 
+    req %>% 
+    req_url_path_append(paste("audio-features", x, sep = "/")) %>%  
+    req_auth_bearer_token(mytoken) %>% 
+    req_perform() %>% 
+    resp_body_json(simplifyVector = T) %>% 
+    as_tibble() 
+  
+}
+```
+
+Once we have the feature function, we will use `lapply` and `do.call` to perform the request for all the tracks and bind them together in a dataframe. For visualizing purposes, we will add a new column specifying the author of the particular songs:
+
+```{r}
+features_list <- lapply(artists, features)
+
+features_df <- do.call(rbind, features_list) 
+
+features_df <- features_df %>% 
+  mutate(
+    author = case_when(
+      id == "49FYlytm3dAAraYgpoJZux" ~ "Rihanna", 
+      id == "1zi7xx7UVEFkmKfv06H8x0" ~ "Drake", 
+      id == "1v7L65Lzy0j0vdpRjJewt1" ~ "Eminem", 
+      id == "1QV6tiMFM6fSOKOGLMHYYg" ~ "Lady Gaga", 
+      id == "3S2R0EVwBSAVMd5UMgKTL0" ~ "Michael Jackson", 
+      id == "22sLuJYcvZOSoLLRYev1s5" ~ "Madonna", 
+      id == "3z8h0TU7ReDPLIbEnYhWZb" ~ "Queen", 
+      id == "0GjEhVFGZW8afUYGChu3Rr" ~ "Abba", 
+      id == "63T7DJ1AFDD6Bn8VzG6JE8" ~ "Rolling Stone", 
+      id == "2tUBqZG2AbRi7Q0BIrVrEj" ~ "Whitney Houston", 
+      id == "6dGnYIeXmHdcikdzNNDMm2" ~ "Beatles", 
+      id == "2goLsvvODILDzeeiT4dAoR" ~ "Cher")) %>% 
+  dplyr::select(author, danceability, energy, key, loudness, speechiness, acousticness, instrumentalness, liveness, valence, tempo, duration_ms) %>% 
+    mutate(
+      decade = case_when(
+        author == "Rihanna" |  author == "Drake" ~ "10s", 
+        author == "Lady Gaga" |  author == "Eminem" ~ "00s", 
+        author == "Madonna" |  author == "Michael Jackson" ~ "90s", 
+        author == "Abba" |  author == "Queen" ~ "80s", 
+        author == "Whitney Houston" |  author == "Rolling Stone" ~ "70s", 
+        author == "Cher" |  author == "Beatles" ~ "60s")) 
+        
+    
+```
+
+##### Plotting the features
+
+```{r}
+features_df$decade <- factor(features_df$decade, levels = c("60s", "70s", "80s", "90s", "00s", "10s"))
+
+features_plot <- ggplot(features_df) +
+  aes(x = danceability, y = energy, colour = decade) +
+  geom_point() +
+  scale_size_area(max_size = 20)+
+  theme_minimal()+
+  geom_text(aes(label = author), vjust = 1) +
+  labs(y = "Energy", 
+       x = "Danceabiity",
+       legend = "Decade")
+
+features_plot
+
+```
+
+The plot above show that the songs for the authors of the 90s and the 00s possess the more energetic and danceable songs. On the contrary, Rolling Stones or The Beatles seem to not be as danceable. However, reusing the previous code we may extend the analysis.
+
+#### 4.3. Combining features from historic songs
+
+As a final step, we may combine the utilities of the custom functions, the historical All Out playlist, and the analysis of the musical features to analyze the differences in musical styles for the different decades.
+
+##### Custom function
+
+The first task consists in obtaining all the ids of the All Out playlist, to look for their features. For that, we will use the third and final custom function follows the same logic as the previous one. First, we construct the request, by adding the endpoint. Then, once we have the JSON for the playlist information, we dig in into the nested key:value pairs until we get the vector with the ids. Also, for identification purposes, we `rbind` the id to the name of the list
+
+```{r}
+features <- function(x) {
+
+all_out <- 
+  req %>% 
+  req_url_path_append(paste("playlists", x, sep = "/")) %>% 
+  req_perform() %>% # Performing the request
+  resp_body_json(simplifyVector = T)
+
+all_out_ids = all_out$tracks$items %>% 
+  dplyr::select(track) %>% 
+  unnest(track) %>% 
+  dplyr::select(id)
+
+name <- all_out$name
+
+df <- cbind(all_out_ids, name)
+
+}
+```
+
+Once we constructed the function, we can use `lapply` and `do.call` to run the function for all the All Outs playlists and store them in a dataframe.
+
+```{r}
+features_list <- lapply(years, features)
+features_df <- do.call(rbind, features_list)
+
+features_df
+```
+
+We will select only a sample of songs, so we don't overload the API and spend too much time on it (taking into account the timeout and the throttle we've set for the `req` base request).
+
+```{r}
+tracks_AO <- sample(features_df$id, 100)
+```
+
+Then, we apply the loop created before for storing the information into a dataset.
+
+```{r}
+AOsongs <- data.frame()
+
+for(i in 1:length(unique(tracks_AO))) { #We set the unique to avoid the features problem. 
+  
+  song <- req %>% 
+    req_url_path_append(paste("audio-features", unique(tracks_AO)[i], sep = "/")) %>% 
+    req_perform() %>% 
+    resp_body_json(simplifyVector = TRUE) %>% 
+    as_tibble()
+  
+  AOsongs <- rbind(song, AOsongs)
+  
+}
+
+AOsongs
+```
+
+We then remove the columns that do not add relevant information and rename the column of the name of the playlist.
+
+```{r}
+AO_Full <- AOsongs %>% 
+  dplyr::select(-uri, -track_href, -analysis_url, -type) %>% 
+  left_join(features_df, by = "id") %>% 
+  dplyr::rename("playlist" = "name")
+```
+
+The first visualization we may do with the set of data is to compare the tempo of the song and its danceability, to distinguish if higher tempo songs are in general more prone to be danced to, for example:
+
+```{r}
+AO_Full$playlist <- factor(AO_Full$playlist, levels = c("All Out 60s", "All Out 70s", "All Out 80s", "All Out 90s", "All Out 2000s", "All Out 2010s"))
+
+featuresAO_plot <- ggplot(AO_Full) +
+  aes(x = tempo, y = danceability, colour = playlist) +
+  geom_point() +
+  scale_size_area(max_size = 20)+
+  theme_minimal()
+
+plotly::ggplotly(featuresAO_plot, tooltip=c("playlist"))
+```
+
+There it is! We may see a kind of 'funnel' pattern towards the higher tempo songs, which means that they all have somewhat high values for danceability (although they don't hold the highest ones).
+
+Finally, using the same code as before for the danceability in the top50, we can plot the energy transmitted by decade. Also, apart from changing the variable, we will also add a facet wrap to visualize
+
+```{r}
+viz5 <- ggplot(AO_Full, aes(x=energy, fill=playlist,
+                    text = paste(playlist)))+
+  geom_density(alpha=0.7, color=NA)+
+  scale_fill_manual(values=c("blue", "orange", "pink", "green", "grey", "red"))+
+  labs(x="Energy", y="Density") +
+  guides(fill=guide_legend(title="Playlist"))+
+  xlim(c(0.25,1)) +
+  theme_minimal()+
+  ggtitle("Energy") +
+  facet_wrap(~playlist, ncol = 3)
+
+plotly::ggplotly(viz5, tooltip=c("text"))
+```
+
+The plot shows the huge differences between decades, and a clear evolution. The songs of the 60s are indeed distributed in the first part of the scale, meaning that they could in fact be less energetic than the rest, and each 10 years the general distribution of the energy is more and more skewed to the right. Nice lesson!
+
+## Summary
+
+In the present scraper, we've analyzed the most recent musical trends, how geographical contexts may affect a lot on musical features, the level of 'disagreement' between different websites on which songs are in the Top 50, and how music is given a certain importance depending on its release date, along with how it's changed over time. The possibilities the Spotify API offers users are very broad and there is much room to explore, so we encourage users to explore on their own and make their own requests in the space below this comments. Remember to use the `req` base request, and to check in the *Spotify player* each track/playlist/album/artist's ID.
