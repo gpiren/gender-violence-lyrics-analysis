@@ -17,33 +17,30 @@ To use the Spotify and Genius APIs, follow these steps:
 
 Sign Up or Log In:
 
-Go to [Spotify Developer Dashboard](https://developer.spotify.com).
+ - Go to [Spotify Developer Dashboard](https://developer.spotify.com).
 
-Log in with your Spotify account or create a new one.
-
-Set Up Your Developer Account:
-
-Once logged in, familiarize yourself with the Spotify API documentation.
+- Log in with your Spotify account or create a new one
 
 Create an Application:
 
-Click Dashboard → Create an App.
+- Click Dashboard → Create an App.
 
-Enter an App Name, Description, and a Redirect URI (e.g., http://localhost:8080).
+- Enter an App Name, Description, and a Redirect URI (e.g., http://localhost:8080).
 
-Select the Web API option, agree to the Developer Terms of Service, and click Create.
+- Select the Web API option, agree to the Developer Terms of Service, and click Create.
 
-Obtain API Credentials:
+*Obtain API Credentials:* 
 
-In your app's dashboard, go to Settings.
+- In your app's dashboard, go to Settings.
 
-Copy your Client ID and Client Secret. These credentials will be used to authenticate your application.
+- Copy your Client ID and Client Secret.
 
 🔹 Step 2: Create a Genius Developer Account
 
 Sign Up or Log In:
 
-Visit the Genius API Developer Page.
+Visit the [Genius API Developer Page]((https://docs.genius.com)).
+
 
 Log in or create a Genius account.
 
