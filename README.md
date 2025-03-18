@@ -7,9 +7,8 @@ Spotify & Genius API Integration
 This project utilizes the Spotify API to retrieve song data and the Genius API to fetch corresponding lyrics. The goal is to seamlessly integrate both services for analyzing music and lyrics.
 
  Collaborators:
- [ @gpiren ](https://github.com/gpiren)
- 
- [ @tedesco-g ](https://github.com/tedesco-g)
+ - [ gpiren ](https://github.com/gpiren)
+ - [ tedesco-g ](https://github.com/tedesco-g)
 
 
 🚀 Getting Started
