@@ -17,7 +17,8 @@ To use the Spotify and Genius APIs, follow these steps:
 
 Sign Up or Log In:
 
-Go to the Spotify Developer Dashboard.
+[Spotify Developer Dashboard.](https://developer.spotify.com))
+Go to Spotify Developer Dashboard.
 
 Log in with your Spotify account or create a new one.
 
@@ -53,11 +54,9 @@ Click New API Client.
 
 Provide the required information (App Name, Description, Website URL, etc.).
 
-Submit your application and wait for approval.
-
 Obtain API Credentials:
 
-Once approved, find your Access Token in the API dashboard.
+Once approved,you find your client id and secret id.
 
 🔹 Step 3: Environment Setup
 
@@ -67,24 +66,5 @@ SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 GENIUS_ACCESS_TOKEN=your_genius_access_token
 
-💡 Important: Never share your .env file or expose your credentials publicly!
-
-🎉 You're Ready!
-
-Now, you have successfully set up the required API access. You can start making API requests to fetch song data from Spotify and retrieve lyrics from Genius!
-
-⚠️ Recommendations
-
-Before running the full script, test if your credentials are stored correctly.
-
-If any issues arise, double-check the .env file and API settings.
-
-📌 Additional Resources
-
-For more details, refer to the official API documentation:
-
-Spotify API Docs
-
-Genius API Docs
 
 Enjoy exploring music data and lyrics with this integration! 🎶
