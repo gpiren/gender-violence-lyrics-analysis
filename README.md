@@ -17,8 +17,7 @@ To use the Spotify and Genius APIs, follow these steps:
 
 Sign Up or Log In:
 
-[Spotify Developer Dashboard.](https://developer.spotify.com))
-Go to Spotify Developer Dashboard.
+Go to [Spotify Developer Dashboard](https://developer.spotify.com).
 
 Log in with your Spotify account or create a new one.
 
