@@ -39,7 +39,7 @@ Create an Application:
 
 Sign Up or Log In:
 
-Visit the [Genius API Developer Page]((https://docs.genius.com)).
+Visit the [Genius API Developer Page](https://docs.genius.com).
 
 
 Log in or create a Genius account.
