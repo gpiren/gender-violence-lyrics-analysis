@@ -21,7 +21,7 @@ To use the Spotify and Genius APIs, follow these steps:
 
 *Create an Application:*
 - Click Dashboard → Create an App.
-- Enter an App Name, Description, and a Redirect URI (e.g., http://localhost:8080).
+- Enter an App Name, Description, and a Redirect URL (e.g., http://localhost:8080).
 - Select the Web API option, agree to the Developer Terms of Service, and click Create.
 
 *Obtain API Credentials:* 
