@@ -8,6 +8,7 @@ This project utilizes the Spotify API to retrieve song data and the Genius API t
 
  Collaborators:
  [ @gpiren ](https://github.com/gpiren)
+ 
  [ @tedesco-g ](https://github.com/tedesco-g)
 
 
