@@ -13,48 +13,37 @@ This project utilizes the Spotify API to retrieve song data and the Genius API t
 
 To use the Spotify and Genius APIs, follow these steps:
 
-🔹 Step 1: Create a Spotify Developer Account
+**🔹 Step 1: Create a Spotify Developer Account**
 
-Sign Up or Log In:
+*Sign Up or Log In:*
 
  - Go to [Spotify Developer Dashboard](https://developer.spotify.com).
 
 - Log in with your Spotify account or create a new one
 
-Create an Application:
-
+*Create an Application:*
 - Click Dashboard → Create an App.
-
 - Enter an App Name, Description, and a Redirect URI (e.g., http://localhost:8080).
-
 - Select the Web API option, agree to the Developer Terms of Service, and click Create.
 
 *Obtain API Credentials:* 
-
 - In your app's dashboard, go to Settings.
-
 - Copy your Client ID and Client Secret.
 
-🔹 Step 2: Create a Genius Developer Account
+**🔹 Step 2: Create a Genius Developer Account**
 
-Sign Up or Log In:
+*Sign Up or Log In:*
+- Visit the [Genius API Developer Page](https://docs.genius.com).
+- Log in or create a Genius account
+- Register an Application
+- Click New API Client
+- Provide the required information (App Name, Description, Website URL, etc.).
 
-Visit the [Genius API Developer Page](https://docs.genius.com).
-
-
-Log in or create a Genius account.
-
-Register an Application:
-
-Click New API Client.
-
-Provide the required information (App Name, Description, Website URL, etc.).
-
-Obtain API Credentials:
+*Obtain API Credentials:*
 
 Once approved,you find your client id and secret id.
 
-🔹 Step 3: Environment Setup
+**🔹 Step 3: Environment Setup**
 
 To securely store API credentials, create a .env file in your project directory and add the following lines:
 
