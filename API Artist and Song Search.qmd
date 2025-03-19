@@ -1,0 +1,195 @@
+---
+title: "API Artist and Song Search"
+format: html
+editor: visual
+---
+
+## Top 5 Spanish Hip/ Hop Rap Artists & Their Top 3 Songs on Spotify
+
+
+Load Requires Packages
+
+```{r}
+library(httr)      # Handles API requests
+library(jsonlite)  # Parses JSON data
+library(dplyr)     # For data manipulation
+library(purrr)     # Functional programming (map functions)
+library(tibble)    # Modern version of data frames
+library(tidyr)     # For handling nested data
+
+```
+
+Authentication: Get Spotify API Token
+
+```{r}
+# Set your credentials (Replace with actual credentials)
+client_id <- "56ecfce3442443899ca589a65c224221"  # Spotify Client ID
+client_secret <- "31f433d8f2244e469ef30152dfbb9b19"  # Spotify Client Secret
+
+# Function to authenticate and retrieve access token
+get_spotify_token <- function(client_id, client_secret) {
+  auth_url <- "https://accounts.spotify.com/api/token"  # Authentication endpoint
+  
+  response <- POST(
+    auth_url,
+    body = list(
+      grant_type = "client_credentials",  # Request a token using client credentials
+      client_id = client_id, 
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+
+  # Check if authentication was successful
+  if (http_status(response)$category != "Success") {
+    stop("Failed to authenticate. Check your client ID and secret.")
+  }
+
+  # Parse the API response and extract the access token
+  token_data <- content(response, as = "parsed", type = "application/json")
+  
+  # Ensure the response contains an access token
+  if (!"access_token" %in% names(token_data)) {
+    stop("Error: Could not retrieve access token.")
+  }
+
+  return(token_data$access_token)  # Return the token for API requests
+}
+
+# Get the access token
+access_token <- get_spotify_token(client_id, client_secret)  
+print(access_token)  # Print token to confirm authentication
+
+```
+
+Search for Hip-Hop/Rap Artists from Spain
+
+```{r}
+# Function to search for hip-hop/rap artists in Spain
+search_artists <- function(query, access_token, limit = 50) {
+  Sys.sleep(0.5)  # Pause for 500ms before request to avoid rate limits
+
+  response <- GET(
+    "https://api.spotify.com/v1/search",
+    query = list(q = query, type = "artist", limit = limit),
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Check if API request was successful
+  if (http_status(response)$category != "Success") {
+    message("API request failed for query: ", query)
+    return(NULL)  # Return NULL to prevent pipeline breakage
+  }
+
+  data <- content(response, as = "parsed", type = "application/json")
+
+  # Check if the response contains artist data
+  if (!"artists" %in% names(data) || length(data$artists$items) == 0) {
+    message("No artists found for query: ", query)
+    return(NULL)
+  }
+
+  # Convert the response into a structured tibble
+  tibble(
+    id = map_chr(data$artists$items, "id", .default = NA),  # Artist ID
+    name = map_chr(data$artists$items, "name", .default = NA),  # Artist name
+    popularity = map_dbl(data$artists$items, "popularity", .default = 0)  # Popularity score
+  )
+}
+
+# Define search terms for Spanish hip-hop and rap artists
+search_terms <- c("hip hop España", "rap España", "trap España", "drill España",
+                  "rap alternativo España", "rap consciente España", 
+                  "gangsta rap España", "hip hop underground España", 
+                  "latin trap España", "reggaeton España", 
+                  "música urbana España", "old school hip hop España",
+                  "spanglish hip hop España")
+
+# Search for artists and combine results into a single tibble
+all_artists <- map_df(search_terms, search_artists, access_token = access_token) %>%
+  distinct(id, .keep_all = TRUE) %>%  # Remove duplicates based on artist ID
+  arrange(desc(popularity))  # Sort by popularity
+
+# Extract the top 5 most popular artists
+top_artists <- head(all_artists, 5)
+
+```
+
+Fetch Detailed Artist Metadata
+
+```{r}
+# Function to get detailed artist metadata using /v1/artists
+get_artist_details <- function(artist_ids, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+
+  response <- GET(
+    "https://api.spotify.com/v1/artists",
+    query = list(ids = paste(artist_ids, collapse = ",")),  # Send multiple artist IDs
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Parse the API response
+  data <- content(response, as = "parsed")$artists
+
+  # Convert to a structured tibble
+  tibble(
+    id = map_chr(data, "id"),  # Artist ID
+    followers = map_dbl(data, ~ .x$followers$total %||% 0)  # Number of followers
+  )
+}
+
+# Fetch additional details for the top 5 artists
+artist_details <- get_artist_details(top_artists$id, access_token)
+
+# Merge detailed artist data with top artist list
+top_artists <- left_join(top_artists, artist_details, by = "id")
+
+```
+
+Retrieve Top 3 Songs for Each Artist
+
+```{r}
+# Function to get an artist's top 3 tracks in Spain
+get_top_tracks <- function(artist_id, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+
+  response <- GET(
+    paste0("https://api.spotify.com/v1/artists/", artist_id, "/top-tracks"),
+    query = list(market = "ES"),  # Fetch top tracks specific to Spain
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Parse API response
+  tracks_data <- content(response, as = "parsed")$tracks
+
+  # If no tracks found, return an empty tibble with NA values
+  if (length(tracks_data) == 0) {
+    return(tibble(track_name = NA_character_, track_popularity = NA_real_))
+  }
+
+  # Extract top 3 tracks
+  tibble(
+    track_name = map_chr(tracks_data[1:3], "name", .default = NA),  # Track name
+    track_popularity = map_dbl(tracks_data[1:3], "popularity", .default = NA)  # Track popularity score
+  )
+}
+
+# Get top 3 tracks for each of the top 5 artists
+top_artists <- top_artists %>%
+  mutate(top_tracks = map(id, ~ get_top_tracks(.x, access_token)))
+
+```
+
+Clean and Format the Final Results
+
+```{r}
+# Unnest the top tracks to a readable format (EXCLUDING genres, image_url, and spotify_link)
+top_artists_tracks <- top_artists %>%
+  select(artist_name = name, artist_popularity = popularity, 
+         followers, top_tracks) %>%
+  unnest(cols = top_tracks)
+
+# Print the final results
+print(top_artists_tracks)
+
+```

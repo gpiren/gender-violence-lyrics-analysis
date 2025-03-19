@@ -6,7 +6,7 @@ date: "2025-02-22"
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-test123
+
 ```
 
 ## Libraries
@@ -73,7 +73,7 @@ top_artists <- artists %>%
     any(grepl("german hip hop|deutschrap|hip hop deutsch|german rap|deutscher rap|pop rap|urban deutsch", 
               genre_list, ignore.case = TRUE)))) %>%
   arrange(desc(popularity)) %>%
-  head(5)  # Get the top 5 most popular German hip hop & rap artists
+  head(10)  # Get the top 5 most popular German hip hop & rap artists
 
 # 🔹 Get top 3 tracks per artist
 
