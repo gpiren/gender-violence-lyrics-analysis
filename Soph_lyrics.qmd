@@ -1,0 +1,1629 @@
+---
+title: "Soph_lyrics"
+format: html
+editor: visual
+---
+
+## Libraries
+
+```{r, message=FALSE}
+library(rvest)     # For HTML parsing
+library(stringdist)
+library(httr)      # Handles API requests
+library(jsonlite)  # Parses JSON data
+library(dplyr)     # For data manipulation
+library(purrr)     # Functional programming (map functions)
+library(tibble)    # Modern version of data frames
+library(tidyr)     # For handling nested data
+library(stringr)
+library(stopwords)
+library(widyr)  
+library(ggplot2)
+library(tidytext)
+library(quanteda)
+library(dplyr)
+library(tidytext) 
+library(widyr) 
+library(tidyr)
+library(stringr)
+library(tidyverse)
+library(tidytext)
+library(stringr)
+library(wordcloud2)
+
+```
+
+
+## Top German Hip/ Hop Rap Artists & Their Top  Songs on Spotify
+
+Authentication: Get Spotify API Token
+
+```{r}
+# Set your credentials (Replace with actual credentials)
+client_id <- "94dfa922c1594dceab2e83b4566f36ec"  # Spotify Client ID
+client_secret <- "d3f1d099d4294020a02e6a191a08c9a2"  # Spotify Client Secret
+
+# Function to authenticate and retrieve access token
+get_spotify_token <- function(client_id, client_secret) {
+  auth_url <- "https://accounts.spotify.com/api/token"  # Authentication endpoint
+  
+  response <- POST(
+    auth_url,
+    body = list(
+      grant_type = "client_credentials",  # Request a token using client credentials
+      client_id = client_id, 
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+  
+  # Check if authentication was successful
+  if (http_status(response)$category != "Success") {
+    stop("Failed to authenticate. Check your client ID and secret.")
+  }
+  
+  # Parse the API response and extract the access token
+  token_data <- content(response, as = "parsed", type = "application/json")
+  
+  # Ensure the response contains an access token
+  if (!"access_token" %in% names(token_data)) {
+    stop("Error: Could not retrieve access token.")
+  }
+  
+  return(token_data$access_token)  # Return the token for API requests
+}
+
+# Get the access token
+access_token <- get_spotify_token(client_id, client_secret)  
+print(access_token)  # Print token to confirm authentication
+ 
+```
+
+Search for Hip-Hop/Rap Artists from Germany
+
+```{r}
+# Function to search for hip-hop/rap artists in Germany
+search_artists <- function(query, access_token, limit = 50) {
+  Sys.sleep(0.5)  # Pause for 500ms before request to avoid rate limits
+  
+  response <- GET(
+    "https://api.spotify.com/v1/search",
+    query = list(q = query, type = "artist", limit = limit),
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+  
+  # Check if API request was successful
+  if (http_status(response)$category != "Success") {
+    message("API request failed for query: ", query)
+    return(NULL)  # Return NULL to prevent pipeline breakage
+  }
+  
+  data <- content(response, as = "parsed", type = "application/json")
+  
+  # Check if the response contains artist data
+  if (!"artists" %in% names(data) || length(data$artists$items) == 0) {
+    message("No artists found for query: ", query)
+    return(NULL)
+  }
+  
+  # Convert the response into a structured tibble
+  tibble(
+    id = map_chr(data$artists$items, "id", .default = NA),  # Artist ID
+    name = map_chr(data$artists$items, "name", .default = NA),  # Artist name
+    popularity = map_dbl(data$artists$items, "popularity", .default = 0)  # Popularity score
+  )
+}
+
+# Define search terms for German hip-hop and rap artists
+search_terms_german <- c("Deutschrap", "Rap Germany", "Deutscher Rapper", "Trap Germany", "Drill Germany",
+                  "Hip Hop Germany")
+
+# Search for artists and combine results into a single tibble
+all_artists_german <- map_df(search_terms_german, search_artists, access_token = access_token) %>%
+  distinct(id, .keep_all = TRUE) %>%  # Remove duplicates based on artist ID
+  arrange(desc(popularity))  # Sort by popularity
+
+# Extract the most popular artists
+top_artists_german <- head(all_artists_german, 7)
+
+
+```
+
+Fetch Detailed Artist Metadata
+
+```{r}
+# Function to get detailed artist metadata using /v1/artists
+get_artist_details_german <- function(artist_ids, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+  
+  response <- GET(
+    "https://api.spotify.com/v1/artists",
+    query = list(ids = paste(artist_ids, collapse = ",")),  # Send multiple artist IDs
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+  
+  # Parse the API response
+  data <- content(response, as = "parsed")$artists
+  
+  # Convert to a structured tibble
+  tibble(
+    id = map_chr(data, "id"),  # Artist ID
+    followers = map_dbl(data, ~ .x$followers$total %||% 0)  # Number of followers
+  )
+}
+
+# Fetch additional details for the top artists
+artist_details_german <- get_artist_details_german(top_artists_german$id, access_token)
+
+# Merge detailed artist data with top artist list
+top_artists_german <- left_join(top_artists_german, artist_details_german, by = "id")
+
+```
+
+Retrieve Top Songs for Each Artist
+
+```{r}
+# Function to get an artist's top tracks in Germany
+get_top_tracks <- function(artist_id, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+  
+  response <- GET(
+    paste0("https://api.spotify.com/v1/artists/", artist_id, "/top-tracks"),
+    query = list(market = "DE"),  # Fetch top tracks specific to Germany
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+  
+  # Parse API response
+  tracks_data <- content(response, as = "parsed")$tracks
+  
+  # If no tracks found, return an empty tibble with NA values
+  if (length(tracks_data) == 0) {
+    return(tibble(track_name = NA_character_, track_popularity = NA_real_))
+  }
+  
+  # Extract top 3 tracks
+  tibble(
+    track_name = map_chr(tracks_data[1:5], "name", .default = NA),  # Track name
+    track_popularity = map_dbl(tracks_data[1:5], "popularity", .default = NA)  # Track popularity score
+  )
+}
+
+# Get top tracks for each of the top artists
+top_artists_german <- top_artists_german %>%
+  mutate(top_tracks = map(id, ~ get_top_tracks(.x, access_token)))
+
+```
+
+Clean and Format the Final Results
+
+```{r}
+# Unnest the top tracks to a readable format (EXCLUDING genres, image_url, and spotify_link)
+top_artists_german_tracks <- top_artists_german %>%
+  select(artist_name = name, artist_popularity = popularity, 
+         followers, top_tracks) %>%
+  unnest(cols = top_tracks)
+
+# we need to delete a spanish Artist manually, because he always appears in the german list
+top_artists_german_tracks <- top_artists_german_tracks %>%
+  filter(!artist_name %in% c("Morad", "Rvfv"))
+
+
+print(top_artists_german_tracks)
+
+
+```
+
+
+## Top 5 Turkish Artists
+
+authentication: Get Spotify API Token
+
+```{r}
+# Set your credentials (Replace with actual credentials)
+client_id <- "56ecfce3442443899ca589a65c224221"  # Spotify Client ID
+client_secret <- "31f433d8f2244e469ef30152dfbb9b19"  # Spotify Client Secret
+
+# Function to authenticate and retrieve access token
+get_spotify_token <- function(client_id, client_secret) {
+  auth_url <- "https://accounts.spotify.com/api/token"  # Authentication endpoint
+  
+  response <- POST(
+    auth_url,
+    body = list(
+      grant_type = "client_credentials",  # Request a token using client credentials
+      client_id = client_id, 
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+
+  # Check if authentication was successful
+  if (http_status(response)$category != "Success") {
+    stop("Failed to authenticate. Check your client ID and secret.")
+  }
+
+  # Parse the API response and extract the access token
+  token_data <- content(response, as = "parsed", type = "application/json")
+  
+  # Ensure the response contains an access token
+  if (!"access_token" %in% names(token_data)) {
+    stop("Error: Could not retrieve access token.")
+  }
+
+  return(token_data$access_token)  # Return the token for API requests
+}
+
+# Get the access token
+access_token <- get_spotify_token(client_id, client_secret)  
+print(access_token)  # Print token to confirm authentication
+
+```
+
+Search for Hip-Hop/Rap Artists from Spain
+
+```{r}
+# Function to search for hip-hop/rap artists in Spain
+search_artists <- function(query, access_token, limit = 50) {
+  Sys.sleep(0.5)  # Pause for 500ms before request to avoid rate limits
+
+  response <- GET(
+    "https://api.spotify.com/v1/search",
+    query = list(q = query, type = "artist", limit = limit),
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Check if API request was successful
+  if (http_status(response)$category != "Success") {
+    message("API request failed for query: ", query)
+    return(NULL)  # Return NULL to prevent pipeline breakage
+  }
+
+  data <- content(response, as = "parsed", type = "application/json")
+
+  # Check if the response contains artist data
+  if (!"artists" %in% names(data) || length(data$artists$items) == 0) {
+    message("No artists found for query: ", query)
+    return(NULL)
+  }
+
+  # Convert the response into a structured tibble
+  tibble(
+    id = map_chr(data$artists$items, "id", .default = NA),  # Artist ID
+    name = map_chr(data$artists$items, "name", .default = NA),  # Artist name
+    popularity = map_dbl(data$artists$items, "popularity", .default = 0)  # Popularity score
+  )
+}
+
+# Define search terms for Spanish hip-hop and rap artists
+search_terms <- c("hip hop Türkiye", "rap Türkiye", "trap Türkiye", "drill Türkiye",
+                  "alternatif rap Türkiye", "gangsta rap Türkiye", "hip hop underground Türkiye", "old school hip hop Türkiye")
+
+# Search for artists and combine results into a single tibble
+all_artists <- map_df(search_terms, search_artists, access_token = access_token) %>%
+  distinct(id, .keep_all = TRUE) %>%  # Remove duplicates based on artist ID
+  arrange(desc(popularity))  # Sort by popularity
+
+# Extract the top 5 most popular artists
+top_artists <- head(all_artists, 5)
+
+```
+
+Fetch Detailed Artist Metadata
+
+```{r}
+# Function to get detailed artist metadata using /v1/artists
+get_artist_details <- function(artist_ids, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+
+  response <- GET(
+    "https://api.spotify.com/v1/artists",
+    query = list(ids = paste(artist_ids, collapse = ",")),  # Send multiple artist IDs
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Parse the API response
+  data <- content(response, as = "parsed")$artists
+
+  # Convert to a structured tibble
+  tibble(
+    id = map_chr(data, "id"),  # Artist ID
+    followers = map_dbl(data, ~ .x$followers$total %||% 0)  # Number of followers
+  )
+}
+
+# Fetch additional details for the top 5 artists
+artist_details <- get_artist_details(top_artists$id, access_token)
+
+# Merge detailed artist data with top artist list
+top_artists <- left_join(top_artists, artist_details, by = "id")
+
+```
+
+Retrieve Top 3 Songs for Each Artist
+
+```{r}
+# Function to get an artist's top 3 tracks in Spain
+get_top_tracks <- function(artist_id, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+
+  response <- GET(
+    paste0("https://api.spotify.com/v1/artists/", artist_id, "/top-tracks"),
+    query = list(market = "ES"),  # Fetch top tracks specific to Spain
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Parse API response
+  tracks_data <- content(response, as = "parsed")$tracks
+
+  # If no tracks found, return an empty tibble with NA values
+  if (length(tracks_data) == 0) {
+    return(tibble(track_name = NA_character_, track_popularity = NA_real_))
+  }
+
+  # Extract top 3 tracks
+  tibble(
+    track_name = map_chr(tracks_data[1:3], "name", .default = NA),  # Track name
+    track_popularity = map_dbl(tracks_data[1:3], "popularity", .default = NA)  # Track popularity score
+  )
+}
+
+# Get top 3 tracks for each of the top 5 artists
+top_artists <- top_artists %>%
+  mutate(top_tracks = map(id, ~ get_top_tracks(.x, access_token)))
+
+```
+
+Clean and Format the Final Results
+
+```{r}
+# Unnest the top tracks to a readable format (EXCLUDING genres, image_url, and spotify_link)
+top_artists_tracks <- top_artists %>%
+  select(artist_name = name, artist_popularity = popularity, 
+         followers, top_tracks) %>%
+  unnest(cols = top_tracks)
+
+# Print the final results
+print(top_artists_tracks)
+
+```
+## Top 5 Spanish Artists
+
+```{r}
+# Set your credentials (Replace with actual credentials)
+client_id <- "56ecfce3442443899ca589a65c224221"  # Spotify Client ID
+client_secret <- "31f433d8f2244e469ef30152dfbb9b19"  # Spotify Client Secret
+
+# Function to authenticate and retrieve access token
+get_spotify_token <- function(client_id, client_secret) {
+  auth_url <- "https://accounts.spotify.com/api/token"  # Authentication endpoint
+  
+  response <- POST(
+    auth_url,
+    body = list(
+      grant_type = "client_credentials",  # Request a token using client credentials
+      client_id = client_id, 
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+
+  # Check if authentication was successful
+  if (http_status(response)$category != "Success") {
+    stop("Failed to authenticate. Check your client ID and secret.")
+  }
+
+  # Parse the API response and extract the access token
+  token_data <- content(response, as = "parsed", type = "application/json")
+  
+  # Ensure the response contains an access token
+  if (!"access_token" %in% names(token_data)) {
+    stop("Error: Could not retrieve access token.")
+  }
+
+  return(token_data$access_token)  # Return the token for API requests
+}
+
+# Get the access token
+access_token <- get_spotify_token(client_id, client_secret)  
+print(access_token)  # Print token to confirm authentication
+
+```
+
+Search for Hip-Hop/Rap Artists from Spain
+
+```{r}
+# Function to search for hip-hop/rap artists in Spain
+search_artists_es <- function(query, access_token, limit = 50) {
+  Sys.sleep(0.5)  # Pause for 500ms before request to avoid rate limits
+
+  response <- GET(
+    "https://api.spotify.com/v1/search",
+    query = list(q = query, type = "artist", limit = limit),
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Check if API request was successful
+  if (http_status(response)$category != "Success") {
+    message("API request failed for query: ", query)
+    return(NULL)  # Return NULL to prevent pipeline breakage
+  }
+
+  data <- content(response, as = "parsed", type = "application/json")
+
+  # Check if the response contains artist data
+  if (!"artists" %in% names(data) || length(data$artists$items) == 0) {
+    message("No artists found for query: ", query)
+    return(NULL)
+  }
+
+  # Convert the response into a structured tibble
+  tibble(
+    id = map_chr(data$artists$items, "id", .default = NA),  # Artist ID
+    name = map_chr(data$artists$items, "name", .default = NA),  # Artist name
+    popularity = map_dbl(data$artists$items, "popularity", .default = 0)  # Popularity score
+  )
+}
+
+# Define search terms for Spanish hip-hop and rap artists
+search_terms_es <- c("hip hop España", "rap España", "trap España", "drill España",
+                  "rap alternativo España", "rap consciente España", 
+                  "gangsta rap España", "hip hop underground España", 
+                  "latin trap España", "reggaeton España", 
+                  "música urbana España", "old school hip hop España",
+                  "spanglish hip hop España")
+
+# Search for artists and combine results into a single tibble
+all_artists_es <- map_df(search_terms_es, search_artists_es, access_token = access_token) %>%
+  distinct(id, .keep_all = TRUE) %>%  # Remove duplicates based on artist ID
+  arrange(desc(popularity))  # Sort by popularity
+
+# Extract the top 5 most popular artists
+top_artists_es <- head(all_artists_es, 5)
+
+```
+
+Fetch Detailed Artist Metadata
+
+```{r}
+# Function to get detailed artist metadata using /v1/artists
+get_artist_details_es <- function(artist_ids, access_token) {
+  Sys.sleep(0.5)  # Pause before request to avoid API rate limits
+
+  response <- GET(
+    "https://api.spotify.com/v1/artists",
+    query = list(ids = paste(artist_ids, collapse = ",")),  # Send multiple artist IDs
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Parse the API response
+  data_es <- content(response, as = "parsed")$artists
+
+  # Convert to a structured tibble
+  tibble(
+    id = map_chr(data_es, "id"),  # Artist ID
+    followers = map_dbl(data_es, ~ .x$followers$total %||% 0)  # Number of followers
+  )
+}
+
+# Fetch additional details for the top 5 artists
+artist_details_es <- get_artist_details_es(top_artists_es$id, access_token)
+
+# Merge detailed artist data with top artist list
+top_artists_es <- left_join(top_artists_es, artist_details_es, by = "id")  
+
+```
+
+Retrieve Top 3 Songs for Each Artist
+
+```{r}
+get_top_tracks_es <- function(artist_id, access_token, existing_songs = NULL) {
+  Sys.sleep(0.5)  # Pause to avoid rate limits
+
+  response_es <- GET(
+    paste0("https://api.spotify.com/v1/artists/", artist_id, "/top-tracks"),
+    query = list(market = "ES"),  # Fetch top tracks specific to Spain
+    add_headers(Authorization = paste("Bearer", access_token))
+  )
+
+  # Check if API request was successful
+  if (status_code(response_es) != 200) {
+    message(paste("API request failed for artist ID:", artist_id, "Status:", status_code(response_es)))
+    return(tibble(track_name_es = NA_character_, track_popularity_es = NA_real_))
+  }
+
+  # Parse API response
+  parsed_response <- content(response_es, as = "parsed", type = "application/json")
+
+  # Validate response structure
+  if (!"tracks" %in% names(parsed_response) || length(parsed_response$tracks) == 0) {
+    message(paste("No tracks found for artist ID:", artist_id))
+    return(tibble(track_name_es = NA_character_, track_popularity_es = NA_real_))
+  }
+
+  # Assign track data
+  tracks_data_es <- parsed_response$tracks
+
+  # Convert to tibble and sort by popularity
+  tracks_df_es <- tibble(
+    track_name_es = map_chr(tracks_data_es, "name", .default = NA),
+    track_popularity_es = map_dbl(tracks_data_es, "popularity", .default = NA)
+  ) %>%
+  arrange(desc(track_popularity_es))  # Sort by popularity
+
+  # Remove already selected songs to avoid duplicates
+  if (!is.null(existing_songs)) {
+    tracks_df_es <- tracks_df_es %>% filter(!(track_name_es %in% existing_songs))
+  }
+
+  # Return top 3 available unique tracks
+  return(head(tracks_df_es, min(nrow(tracks_df_es), 3)))
+}
+
+# Initialize empty vector to track selected songs
+selected_songs_es <- c()
+
+# Apply function with duplicate filtering
+top_artists_es <- top_artists_es %>%
+  mutate(top_tracks_es = map(id, ~ {
+    tracks <- get_top_tracks_es(.x, access_token, existing_songs = selected_songs_es)
+    selected_songs_es <<- c(selected_songs_es, tracks$track_name_es)  # Update selected songs list
+    return(tracks)
+  }))
+
+```
+
+Clean and Format the Final Results
+
+```{r}
+# Unnest the top tracks to a readable format (EXCLUDING genres, image_url, and spotify_link)
+top_artists_tracks_es <- top_artists_es %>%
+  select(artist_name = name, artist_popularity = popularity, 
+         followers, top_tracks_es) %>%  # Use `_es`
+  unnest(cols = top_tracks_es)
+
+# Print the final results
+print(top_artists_tracks_es)
+
+```
+
+
+
+#### Get the Lyrics German
+
+We will try to extract Genius IDs for songs on top of the URL
+
+```{r}
+ 
+# Function to get Genius API token
+get_genius_token <- function(client_id, client_secret) {
+  response <- POST(
+    "https://api.genius.com/oauth/token",
+    body = list(
+      grant_type = "client_credentials",
+      client_id = client_id,
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+  if (status_code(response) != 200) {
+    stop("Oops! Can’t get a new card. Check your ID and secret.")
+  }
+  data <- content(response, as = "parsed", type = "application/json")
+  return(data$access_token)
+}
+
+# Genius API Credentials
+client_id <- "4oDCoWG71g2O4X4TvhAK608CcO9EfBhRe3QGlHq_wnetmO_jOE17QQq5qamYz5Ht"
+client_secret <- "_7H4JCzmCdArxOFnpExlSKsJsPM0EUIRTxvbqtJ8K_97vCjEE3Nwm3K90ccibiMvLpLCCrN679v4mFj_WDXVCg"
+genius_access_token <- get_genius_token(client_id, client_secret)
+
+genius_base_url <- "https://api.genius.com"
+
+# Function to get Genius song URL and ID
+genious_get_song_data <- function(artist, track, access_token) {
+  Sys.sleep(1)  # Delay to avoid rate limiting
+  
+  query <- paste(artist, track, "German", sep = " ")
+  search_url <- paste0(genius_base_url, "/search")
+  
+  response <- GET(
+    search_url,
+    query = list(q = query, access_token = access_token),
+    add_headers("User-Agent" = "Mozilla/5.0")
+  )
+  
+  if (status_code(response) != 200) {
+    message(paste("Search failed for:", artist, "-", track, "Status:", status_code(response)))
+    return(list(url = NA, id = NA))
+  }
+  
+  data <- content(response, as = "parsed", type = "application/json")
+  hits <- data$response$hits
+  
+  if (length(hits) == 0) {
+    message(paste("No Genius match found for:", artist, "-", track))
+    return(list(url = NA, id = NA))
+  }
+  
+  similarity <- function(a, b) stringdist(tolower(a), tolower(b), method = "lv")
+  
+  best_match <- NULL
+  best_score <- Inf
+  
+  for (hit in hits) {
+    song <- hit$result
+    song_artist <- song$primary_artist$name
+    song_title <- song$title
+    song_url <- song$url
+    song_id <- song$id
+    
+    if (!grepl("-lyrics$", song_url)) next
+    
+    artist_similarity <- similarity(artist, song_artist)
+    track_similarity <- similarity(track, song_title)
+    total_score <- artist_similarity + track_similarity
+    
+    if (total_score < best_score) {
+      best_score <- total_score
+      best_match <- list(url = song_url, id = song_id)
+    }
+    
+    if (artist_similarity == 0 && track_similarity == 0) {
+      message(paste("Found exact match Genius URL:", song_url))
+      return(list(url = song_url, id = song_id))
+    }
+  }
+  
+  if (!is.null(best_match)) {
+    message(paste("Found best match Genius URL:", best_match$url))
+    return(best_match)
+  }
+  
+  message(paste("No suitable match found for:", artist, "-", track))
+  return(list(url = NA, id = NA))
+}
+
+# Add Genius URLs and IDs to dataframe
+top_artists_german_tracks <- top_artists_german_tracks %>%
+  mutate(
+    genius_data = map2(artist_name, track_name, ~ genious_get_song_data(.x, .y, genius_access_token)),
+    genius_url = map_chr(genius_data, "url"),
+    genius_id = map_int(genius_data, "id")
+  ) %>%
+  drop_na()
+
+# View the results
+print(top_artists_german_tracks %>% select(artist_name, track_name, genius_url, genius_id))
+
+
+
+```
+
+
+##### scrape from Genius German
+
+Function to Scrape Lyrics from Genius
+
+```{r}
+get_genius_lyrics <- function(song_url) {
+  if (is.na(song_url)) return(NA)  # If no URL found, return NA
+  
+  Sys.sleep(1)  # Pause to avoid getting blocked
+  
+  # Try reading the page
+  tryCatch({
+    page <- read_html(song_url)
+    
+    # Extract lyrics (Genius structure may change, so check elements)
+    lyrics <- page %>%
+      html_nodes("div.lyrics") %>%  # Old structure
+      html_text(trim = TRUE)
+    
+    # Alternative extraction (new Genius layout)
+    if (length(lyrics) == 0) {
+      lyrics <- page %>%
+        html_nodes("div[class^='Lyrics__Container']") %>%
+        html_text(trim = TRUE) %>%
+        paste(collapse = " ")
+    }
+    
+    if (length(lyrics) == 0) {
+      message(paste("Lyrics not found for:", song_url))
+      return(NA)
+    }
+    
+    return(lyrics)
+  }, error = function(e) {
+    message(paste("Error scraping lyrics for:", song_url))
+    return(NA)
+  })
+}
+
+
+top_artists_german_tracks <- top_artists_german_tracks %>%
+  mutate(lyrics  = map_chr(genius_url , get_genius_lyrics ))
+
+```
+
+View and Save Final Dataset
+
+```{r}
+# View final dataset with Genius IDs, URLs, and Lyrics
+print(top_artists_german_tracks  %>% select(artist_name, track_name , genius_url , genius_id , lyrics ))
+
+top_artists_german_tracks_atomic <- top_artists_german_tracks  %>%
+  select(artist_name, track_name , genius_url , genius_id , lyrics ) %>%
+  mutate(across(everything(), as.character))  # Convert all columns to character
+# Save to CSV
+write.csv(top_artists_german_tracks_atomic, "german_artists_lyrics.csv", row.names = FALSE)
+
+
+```
+
+
+#### Get the Lyrics Turkish
+
+```{r}
+
+get_genius_token <- function(client_id, client_secret) {
+  response <- POST(
+    "https://api.genius.com/oauth/token",
+    body = list(
+      grant_type = "client_credentials",
+      client_id = client_id,
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+  if (status_code(response) != 200) {
+    stop("Oops! Can’t get a new card. Check your ID and secret.")
+  }
+  data <- content(response, as = "parsed", type = "application/json")
+  return(data$access_token)
+}
+
+# Your Genius ID and Secret (replace these!)
+genius_client_id <- "uwl8ZQdgP82zYmy3rH7Vnpi45tU6xRIBWmBMYvHZh7rVsQkL9n_jncouUBKaKMV_"
+genius_client_secret <- "Pz-b4W08UwEAbCf_UgGn46n4lp6SitPMSh-E20tlfrpM-BG-lMm_Iu55ju36_gdh3zE9iy8WgK3uveAaZ8dGng"
+
+# Get the new token
+genius_access_token <- get_genius_token(genius_client_id, genius_client_secret)
+genius_base_url <- "https://api.genius.com"
+
+# Function to search for a song on Genius and get its URL
+get_genius_song_url <- function(artist, track, access_token) {
+  Sys.sleep(1)  # Delay to avoid rate limiting
+  
+  # Construct search query with a hint for Turkish context
+  query <- paste(artist, track, "Türkiye", sep = " ")
+  search_url <- paste0(genius_base_url, "/search")
+  
+  # Make the API request
+  response <- GET(
+    search_url,
+    query = list(q = query, access_token = access_token),
+    add_headers("User-Agent" = "Mozilla/5.0")
+  )
+  
+  # Check if request was successful
+  if (status_code(response) != 200) {
+    message(paste("Search failed for:", artist, "-", track, "Status:", status_code(response)))
+    return(NA)
+  }
+  
+  # Parse JSON response
+  data <- content(response, as = "parsed", type = "application/json")
+  hits <- data$response$hits
+  
+  # Check if any results were found
+  if (length(hits) == 0) {
+    message(paste("No Genius match found for:", artist, "-", track))
+    return(NA)
+  }
+  
+  # Function to calculate string similarity (lower is better)
+  similarity <- function(a, b) stringdist(tolower(a), tolower(b), method = "lv")
+  
+  # Find the best match based on artist and track name
+  best_match <- NULL
+  best_score <- Inf
+  
+  for (hit in hits) {
+    song <- hit$result
+    song_artist <- song$primary_artist$name
+    song_title <- song$title
+    song_url <- song$url
+    
+    # Skip if not a lyrics page
+    if (!grepl("-lyrics$", song_url)) next
+    
+    # Calculate similarity scores
+    artist_similarity <- similarity(artist, song_artist)
+    track_similarity <- similarity(track, song_title)
+    total_score <- artist_similarity + track_similarity
+    
+    # Update best match if this score is lower (better)
+    if (total_score < best_score) {
+      best_score <- total_score
+      best_match <- song_url
+    }
+    
+    # Early exit if exact match found (optional optimization)
+    if (artist_similarity == 0 && track_similarity == 0) {
+      message(paste("Found exact match Genius URL:", song_url))
+      return(song_url)
+    }
+  }
+  
+  # Return the best match if found
+  if (!is.null(best_match)) {
+    message(paste("Found best match Genius URL:", best_match))
+    return(best_match)
+  }
+  
+  message(paste("No suitable match found for:", artist, "-", track))
+  return(NA)
+}
+
+# Add Genius URLs to the dataframe
+top_artists_tracks <- top_artists_tracks %>%
+  mutate(
+    genius_url = map2_chr(artist_name, track_name, ~ get_genius_song_url(.x, .y, genius_access_token))
+  )
+
+# View the results
+print(top_artists_tracks %>% select(artist_name, track_name, genius_url))
+```
+
+#### Get the Lyrics
+
+
+We will try to extract Genius IDs for songs on top of the URL
+
+```{r}
+
+# Function to search for a song on Genius and get its URL and ID
+genious_base_url <- "https://api.genius.com"
+
+get_genius_song_url <- function(artist, track, access_token) {
+  Sys.sleep(1)  # Delay to avoid rate limiting
+  
+  # Construct search query with a hint for Turkish context
+  query <- paste(artist, track, "Türkiye", sep = " ")
+  search_url <- paste0(genious_base_url, "/search")
+  
+  # Make the API request
+  response <- GET(
+    search_url,
+    query = list(q = query, access_token = access_token),
+    add_headers("User-Agent" = "Mozilla/5.0")
+  )
+  
+  # Check if request was successful
+  if (status_code(response) != 200) {
+    message(paste("Search failed for:", artist, "-", track, "Status:", status_code(response)))
+    return(list(url = NA, id = NA))
+  }
+  
+  # Parse JSON response
+  data <- content(response, as = "parsed", type = "application/json")
+  hits <- data$response$hits
+  
+  # Check if any results were found
+  if (length(hits) == 0) {
+    message(paste("No Genius match found for:", artist, "-", track))
+    return(list(url = NA, id = NA))
+  }
+  
+  # Function to calculate string similarity (lower is better)
+  similarity <- function(a, b) stringdist(tolower(a), tolower(b), method = "lv")
+  
+  # Find the best match based on artist and track name
+  best_match <- NULL
+  best_score <- Inf
+  
+  for (hit in hits) {
+    song <- hit$result
+    song_artist <- song$primary_artist$name
+    song_title <- song$title
+    song_url <- song$url
+    song_id <- song$id
+    
+    # Skip if not a lyrics page
+    if (!grepl("-lyrics$", song_url)) next
+    
+    # Calculate similarity scores
+    artist_similarity <- similarity(artist, song_artist)
+    track_similarity <- similarity(track, song_title)
+    total_score <- artist_similarity + track_similarity
+    
+    # Update best match if this score is lower (better)
+    if (total_score < best_score) {
+      best_score <- total_score
+      best_match <- list(url = song_url, id = song_id)
+    }
+    
+    # Early exit if exact match found (optional optimization)
+    if (artist_similarity == 0 && track_similarity == 0) {
+      message(paste("Found exact match Genius URL:", song_url))
+      return(list(url = song_url, id = song_id))
+    }
+  }
+  
+  # Return the best match if found
+  if (!is.null(best_match)) {
+    message(paste("Found best match Genius URL:", best_match$url))
+    return(best_match)
+  }
+  
+  message(paste("No suitable match found for:", artist, "-", track))
+  return(list(url = NA, id = NA))
+}
+
+# Add Genius URLs to the dataframe
+top_artists_tracks <- top_artists_tracks %>%
+  mutate(
+    genius_data = map2(artist_name, track_name, ~ get_genius_song_url(.x, .y, genius_access_token)),
+    genius_url = map_chr(genius_data, "url"),
+    genius_id = map_int(genius_data, "id")
+  )
+
+# View the results
+print(top_artists_tracks %>% select(artist_name, track_name, genius_url, genius_id))
+
+```
+
+##### scrape from Genius Turkish
+
+Function to Scrape Lyrics from Genius
+
+```{r}
+
+get_genius_lyrics <- function(song_url) {
+  if (is.na(song_url)) return(NA)  # If no URL found, return NA
+  
+  Sys.sleep(1)  # Pause to avoid getting blocked
+  
+  # Try reading the page
+  tryCatch({
+    page <- read_html(song_url)
+    
+    # Extract lyrics (Genius structure may change, so check elements)
+    lyrics <- page %>%
+      html_nodes("div.lyrics") %>%  # Old structure
+      html_text(trim = TRUE)
+    
+    # Alternative extraction (new Genius layout)
+    if (length(lyrics) == 0) {
+      lyrics <- page %>%
+        html_nodes("div[class^='Lyrics__Container']") %>%
+        html_text(trim = TRUE) %>%
+        paste(collapse = " ")
+    }
+    
+    if (length(lyrics) == 0) {
+      message(paste("Lyrics not found for:", song_url))
+      return(NA)
+    }
+    
+    return(lyrics)
+  }, error = function(e) {
+    message(paste("Error scraping lyrics for:", song_url))
+    return(NA)
+  })
+}
+
+# Scrape Lyrics for All Songs
+top_artists_tracks <- top_artists_tracks %>%
+  mutate(lyrics = map_chr(genius_url, get_genius_lyrics))
+
+
+
+# View final dataset with Genius IDs, URLs, and Lyrics
+print(top_artists_tracks %>% select(artist_name, track_name, genius_url, genius_id, lyrics))
+
+# Ensure all columns are atomic types before saving to CSV
+top_artists_tracks_tr_atomic <- top_artists_tracks %>%
+  select(artist_name, track_name, genius_url, genius_id, lyrics) %>%
+  mutate(across(everything(), as.character))  # Convert all columns to character
+
+
+```
+
+View and Save Final Dataset
+
+```{r}
+# View final dataset with Genius IDs, URLs, and Lyrics
+print(top_artists_tracks_tr_atomic %>% select(artist_name, track_name, genius_url, genius_id, lyrics))
+
+# Save to CSV
+write.csv(top_artists_tracks_tr_atomic, "top_artists_tracks_with_TR.csv", row.names = FALSE)
+
+
+```
+#### Get the Lyrics Spanish
+Set Up Genius API
+
+```{r}
+# Set Genius API credentials (Replace these with your actual values)
+genius_client_es <- "uwl8ZQdgP82zYmy3rH7Vnpi45tU6xRIBWmBMYvHZh7rVsQkL9n_jncouUBKaKMV_"
+genius_client_secret_es <- "Pz-b4W08UwEAbCf_UgGn46n4lp6SitPMSh-E20tlfrpM-BG-lMm_Iu55ju36_gdh3zE9iy8WgK3uveAaZ8dGng"
+
+# Function to get Genius API access token
+get_genius_token_es <- function(client_id, client_secret) {
+  auth_url <- "https://api.genius.com/oauth/token"
+
+  response <- POST(
+    auth_url,
+    body = list(
+      grant_type = "client_credentials",
+      client_id = client_id,
+      client_secret = client_secret
+    ),
+    encode = "form"
+  )
+
+  # Check if the request was successful
+  if (http_status(response)$category != "Success") {
+    stop("Failed to authenticate with Genius API. Check your client ID and secret.")
+  }
+
+  # Parse the API response
+  token_data <- fromJSON(rawToChar(response$content))
+
+  # Ensure access token is retrieved
+  if (!"access_token" %in% names(token_data)) {
+    stop("Error: Could not retrieve Genius access token.")
+  }
+
+  return(token_data$access_token)
+}
+
+# Get the Genius API access token
+genius_access_token_es <- get_genius_token_es(genius_client_es, genius_client_secret_es)
+
+# Ensure the Genius base API URL is set
+genius_base_url_es <- "https://api.genius.com"
+
+# Print the access token to confirm authentication
+print(genius_access_token_es)
+
+```
+
+Function to Search for a Song on Genius
+
+```{r}
+get_genius_song_data_es <- function(artist, track, access_token) {
+  Sys.sleep(1)  # Delay to avoid rate limiting
+  
+  # Construct search query
+  query <- paste(artist, track, sep = " ")
+  search_url <- paste0(genius_base_url_es, "/search")
+  
+  # Make the API request
+  response <- GET(
+    search_url,
+    query = list(q = query, access_token = access_token),
+    add_headers("User-Agent" = "Mozilla/5.0")
+  )
+  
+  # Check if request was successful
+  if (status_code(response) != 200) {
+    message(paste("Search failed for:", artist, "-", track, "Status:", status_code(response)))
+    return(list(url = NA, id = NA))
+  }
+  
+  # Parse JSON response
+  data_es <- content(response, as = "parsed", type = "application/json")
+  hits_es <- data_es$response$hits
+  
+  # Check if any results were found
+  if (length(hits_es) == 0) {
+    message(paste("No Genius match found for:", artist, "-", track))
+    return(list(url = NA, id = NA))
+  }
+  
+  # Function to calculate string similarity (lower is better)
+  similarity <- function(a, b) stringdist(tolower(a), tolower(b), method = "lv")
+  
+  # Find the best match based on artist and track name
+  best_match <- NULL
+  best_score <- Inf
+  
+  for (hit in hits_es) {
+    song <- hit$result
+    song_artist <- song$primary_artist$name
+    song_title <- song$title
+    song_url <- song$url
+    song_id <- song$id
+    
+    # Skip if not a lyrics page
+    if (!grepl("-lyrics$", song_url)) next
+    
+    # Calculate similarity scores
+    artist_similarity <- similarity(artist, song_artist)
+    track_similarity <- similarity(track, song_title)
+    total_score <- artist_similarity + track_similarity
+    
+    # Update best match if this score is lower (better)
+    if (total_score < best_score) {
+      best_score <- total_score
+      best_match <- list(url = song_url, id = song_id)
+    }
+    
+    # Early exit if exact match found
+    if (artist_similarity == 0 && track_similarity == 0) {
+      message(paste("Found exact match Genius URL:", song_url))
+      return(list(url = song_url, id = song_id))
+    }
+  }
+  
+  # Return the best match if found
+  if (!is.null(best_match)) {
+    message(paste("Found best match Genius URL:", best_match$url))
+    return(best_match)
+  }
+  
+  message(paste("No suitable match found for:", artist, "-", track))
+  return(list(url = NA, id = NA))
+}
+
+```
+
+Add Genius URLs & IDs to top_artists_tracks_es
+
+```{r}
+# Add Genius URLs to the dataframe for Spanish artists
+top_artists_tracks_es <- top_artists_tracks_es %>%
+  mutate(
+    genius_data_es = map2(artist_name, track_name_es, ~ get_genius_song_data_es(.x, .y, genius_access_token_es)),
+    genius_url_es = map_chr(genius_data_es, "url"),
+    genius_id_es = map_int(genius_data_es, "id")
+  )
+
+```
+
+Function to Scrape Lyrics from Genius
+
+```{r}
+# Function to Scrape Lyrics from Genius
+get_genius_lyrics_es <- function(song_url) {
+  if (is.na(song_url)) return(NA)  # If no URL found, return NA
+
+  Sys.sleep(1)  # Pause to avoid getting blocked
+
+  # Try reading the page
+  tryCatch({
+    page <- read_html(song_url)
+
+    # Extract lyrics (Genius structure may change, so check elements)
+    lyrics <- page %>%
+      html_nodes("div.lyrics") %>%  # Old structure
+      html_text(trim = TRUE)
+
+    # Alternative extraction (new Genius layout)
+    if (length(lyrics) == 0) {
+      lyrics <- page %>%
+        html_nodes("div[class^='Lyrics__Container']") %>%
+        html_text(trim = TRUE) %>%
+        paste(collapse = " ")
+    }
+
+    if (length(lyrics) == 0) {
+      message(paste("Lyrics not found for:", song_url))
+      return(NA)
+    }
+
+    return(lyrics)
+  }, error = function(e) {
+    message(paste("Error scraping lyrics for:", song_url))
+    return(NA)
+  })
+}
+
+```
+
+Scrape Lyrics for All Songs
+
+```{r}
+# Scrape Lyrics for All Songs
+top_artists_tracks_es <- top_artists_tracks_es %>%
+  mutate(lyrics_es = map_chr(genius_url_es, get_genius_lyrics_es))
+
+```
+
+View and Save Final Dataset
+
+```{r}
+# View final dataset with Genius IDs, URLs, and Lyrics
+print(top_artists_tracks_es %>% select(artist_name, track_name_es, genius_url_es, genius_id_es, lyrics_es))
+
+# Ensure all columns are atomic types before saving to CSV
+top_artists_tracks_es_atomic <- top_artists_tracks_es %>%
+  select(artist_name, track_name_es, genius_url_es, genius_id_es, lyrics_es) %>%
+  mutate(across(everything(), as.character))  # Convert all columns to character
+
+# Save to CSV
+write.csv(top_artists_tracks_es_atomic, "spanish_artists_lyrics.csv", row.names = FALSE)
+
+
+```
+
+## Cleaning Data
+
+```{r}
+turkish_lyrics <- read.csv("top_artists_tracks_with_TR.csv")
+```
+
+```{r}
+german_lyrics <- read.csv("german_artists_lyrics.csv")
+```
+
+cleaning lyrics:
+```{r}
+clean_lyrics_de <- function(lyrics) {
+  if (is.na(lyrics)) return(NA)
+  lyrics <- str_replace_all(lyrics, "\\[.*?\\]", "")
+  lyrics <- str_replace_all(lyrics, "\\(.*?\\)", "")
+  lyrics <- str_replace_all(lyrics, "[^A-Za-z0-9äöüÄÖÜß\\s\\n.,?!;:'\"-]", "")
+  lyrics <- str_replace_all(lyrics, "(?<=[a-z0-9])(?=[A-ZÄÖÜ])", "\n")
+  lyrics <- str_squish(lyrics)
+  
+  return(lyrics)
+}
+
+```
+
+```{r}
+german_lyrics <- german_lyrics %>%
+  mutate(cleaned_lyrics = map_chr(lyrics, clean_lyrics_de))
+
+print(german_lyrics %>% select(artist_name, track_name, cleaned_lyrics))
+```
+
+Some lyrics are in english or spanish lyrics from german speaking artist, we need to remove those songs:
+``````{r, echo=FALSE}
+
+german_lyrics <- german_lyrics %>%
+  filter(!track_name %in% c( "Cold as Ice", "Toyota (2016)", "Palmen aus Plastik", "Toto (feat. RAF Camora)","04:30","Babylon"))
+
+```
+
+cleaning Turkish lyrics:
+```{r}
+clean_lyrics_tr <- function(lyrics) {
+  if (is.na(lyrics)) return(NA)
+
+  # Remove text within square brackets and ensure proper spacing
+  lyrics <- str_replace_all(lyrics, "\\[.*?\\]", "")  # Remove content within []
+  
+  # Remove text within parentheses and ensure proper spacing
+  lyrics <- str_replace_all(lyrics, "\\(.*?\\)", "")  # Remove content within ()
+  
+  # Remove text within curly brackets (if applicable)
+  lyrics <- str_replace_all(lyrics, "\\{.*?\\}", "")  # Remove content within {}
+
+  # Add extra space or newline before uppercase letters that indicate new sections
+  lyrics <- str_replace_all(lyrics, "(?<=[a-z0-9])(?=[A-Z])", "\n")
+  
+  lyrics <- str_replace_all(lyrics, "[\"'\\?\\\\(),]", "")
+
+  # Remove extra whitespace but preserve line breaks
+  lyrics <- str_replace_all(lyrics, "\\s+", " ")
+  lyrics <- str_replace_all(lyrics, "(?<!\n)\\s*(?=\n)", "")
+
+  # Remove unwanted special characters, but keep specific Turkish letters
+  lyrics <- str_replace_all(lyrics, "[^A-Za-z0-9ıöüçğşİÖÜÇĞŞ\\s\\n.,?!;:'\"-]", "")
+
+  # Ensure proper spacing between words
+  lyrics <- str_squish(lyrics)
+
+  return(lyrics)
+}
+
+# Apply the cleaning function to the lyrics column
+top_artists_tracks_tr_atomic <- top_artists_tracks_tr_atomic %>%
+  mutate(lyrics = map_chr(lyrics, clean_lyrics_tr))
+
+# View the cleaned lyrics
+print(top_artists_tracks_tr_atomic %>% select(artist_name, track_name, lyrics))
+
+```
+
+
+```{r}
+write.csv(top_artists_tracks_tr_atomic, file = "top_artists_tracks_with_TR.csv", row.names = FALSE)
+```
+
+```{r}
+
+# Function to clean lyrics
+cleaned_lyrics_es <- function(lyrics) {
+  if (is.na(lyrics)) return(NA)
+
+  # Remove text within brackets and ensure proper spacing
+  lyrics <- str_replace_all(lyrics, "\\s*\\[.*?\\]\\s*", " ")
+  lyrics <- str_replace_all(lyrics, "\\s*\\(.*?\\)\\s*", " ")
+
+  # Add extra space or newline before uppercase letters that indicate new sections
+  lyrics <- str_replace_all(lyrics, "(?<=[a-z0-9])(?=[A-Z])", "\n")
+
+  # Remove extra whitespace but preserve line breaks
+  lyrics <- str_replace_all(lyrics, "\\s+", " ")
+  lyrics <- str_replace_all(lyrics, "(?<!\n)\\s*(?=\n)", "")
+
+  # Remove special characters or symbols
+  lyrics <- str_replace_all(lyrics, "[^A-Za-z0-9\\s\\n\\.,?!;:'\"-]", "")
+
+  # Ensure proper spacing between words
+  lyrics <- str_squish(lyrics)
+
+  return(lyrics)
+}
+
+# **Ensure `lyrics_es` exists before cleaning**
+if (!"lyrics_es" %in% colnames(top_artists_tracks_es)) {
+  message("Warning: `lyrics_es` column is missing! Initializing as NA.")
+  top_artists_tracks_es <- top_artists_tracks_es %>%
+    mutate(lyrics_es = NA_character_)
+}
+
+# **Apply the cleaning function correctly**
+top_artists_tracks_es <- top_artists_tracks_es %>%
+  mutate(lyrics_es = map_chr(lyrics_es, ~ ifelse(is.na(.x), NA_character_, cleaned_lyrics_es(.x))))
+
+# **View the cleaned lyrics**
+print(top_artists_tracks_es %>% select(artist_name, track_name_es, lyrics_es))
+
+# **Save the cleaned data to CSV**
+write.csv(top_artists_tracks_es %>% select(artist_name, track_name_es, genius_url_es, genius_id_es, lyrics_es),
+          "cleaned_spanish_lyrics.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+# Load cleaned Spanish lyrics dataset
+spanish_lyrics <- read.csv("cleaned_spanish_lyrics.csv", stringsAsFactors = FALSE)
+
+```
+
+
+##Text mining: 
+
+
+Tokenize the words and adding stepwords:
+German:
+```{r}
+german_lyrics_cleaned <- german_lyrics %>%
+  unnest_tokens(word, cleaned_lyrics)
+
+```
+
+```{r}
+german_stopwords <- stopwords("de", source = "stopwords-iso")
+
+# Remove German stopwords
+german_lyrics_cleaned <- german_lyrics_cleaned %>%
+  filter(!word %in% german_stopwords)
+
+
+
+```
+
+
+Turkish:
+```{r}
+
+# Get Turkish stopwords
+turkish_stops <- stopwords("turkish", source = "stopwords-iso")
+
+
+
+```
+
+
+```{r}
+tokens_lyrics_tr <- tokens(top_artists_tracks_tr_atomic$lyrics)
+dfm_text <- dfm(tokens_lyrics_tr)
+
+
+```
+
+spanish: 
+```{r}
+
+
+# Load standard Spanish stopwords
+spanish_stops <- stopwords("es")  
+
+# **Custom stopwords: Add all manually identified words**
+custom_stopwords <- c("si", "ah", "oh", "ala", "eh", "verso", "estribillo", "pa", 
+                      "quiere", "quiero", "woh", "morad", "sé", "uh", "pone", "ser",
+                      "doy", "t'u", "s'e", "vo'a", "jc", "to", "ere", "ahah", "voa", "beny", "yan")  
+
+# **Combine standard + custom stopwords**
+all_stopwords <- unique(c(spanish_stops, custom_stopwords))
+
+# **Normalize and clean lyrics before tokenizing**
+word_freq_es <- top_artists_tracks_es_atomic %>%
+  filter(!is.na(lyrics_es) & lyrics_es != "") %>%  # **REMOVE NA + EMPTY ROWS**
+  mutate(
+    lyrics_es = str_to_lower(lyrics_es),  # Convert to lowercase
+    lyrics_es = iconv(lyrics_es, from = "UTF-8", to = "ASCII//TRANSLIT"),  # Remove accents
+    lyrics_es = str_replace_all(lyrics_es, "[[:punct:]]", ""),  # Remove punctuation
+    lyrics_es = str_replace_all(lyrics_es, "\\b(na)\\b", "")  # **Remove NA appearing as "na"**
+  ) %>%
+  unnest_tokens(word, lyrics_es) %>%  # Tokenize text
+  filter(!word %in% all_stopwords & !is.na(word) & word != "") %>%  # **REMOVE STOPWORDS + NA**
+  count(word, sort = TRUE)  # Count word frequencies
+
+# **Check if stopwords & NA are properly removed**
+print(head(word_freq_es, 20))  # View most frequent words
+
+
+```
+
+
+Calculating the word freqeuncies: 
+German
+```{r}
+word_freq <- german_lyrics_cleaned %>%
+  count(word, sort = TRUE)
+
+word_freq
+```
+
+Bing-Sentiment Word-list
+```{r}
+# analyze the mood 
+
+sentiments_bing <- get_sentiments("bing")
+
+sentiment_analysis_bing <- german_lyrics_cleaned %>%
+  inner_join(sentiments_bing, by = "word") %>%
+  count(sentiment, sort = TRUE)
+
+# distribution positive /negative Words
+sentiment_analysis_bing
+
+ggplot(sentiment_analysis_bing, aes(x = sentiment, y = n, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Positive & Negative Sentiments in Song Lyrics", x = "Sentiment", y = "Count")
+
+```
+The sentiment analysis of the song lyrics shows that negative words occur significantly more frequently than positive ones. This could indicate that the song lyrics tend to deal with melancholic, critical or gloomy topics.
+
+
+NRC-Sentiment-Wordlist (Emotions)
+```{r}
+sentiments_nrc <- get_sentiments("nrc")
+
+# calculate emotions freqnecies
+sentiment_analysis_nrc <- german_lyrics_cleaned %>%
+  inner_join(sentiments_nrc, by = "word") %>%
+  count(sentiment, sort = TRUE)
+
+
+ggplot(sentiment_analysis_nrc, aes(x = reorder(sentiment, -n), y = n, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Emotional Analysis of songs", x = "Emotions", y = "Frequencies")
+
+
+```
+The emotional analysis of the lyrics shows that negative emotions occur most frequently, followed by fear and a moderate number of positive terms. This indicates that the lyrics often have a gloomy or serious atmosphere, but still contain elements of trust and positive emotions.
+
+
+Word-correlations
+```{r}
+
+word_correlation <- german_lyrics_cleaned %>%
+  unnest_tokens(word, lyrics) %>%
+  pairwise_cor(word, track_name, sort = TRUE)
+
+
+print(head(word_correlation, 20))
+
+word_correlation
+
+# Filter für "Mann"
+mann_correlation <- word_correlation %>%
+  filter(item1 == "männer" | item2 == "mann")
+
+print(mann_correlation)
+
+# Filter für "Frau"
+frau_correlation <- word_correlation %>%
+  filter(item1 == "frauen"| item2 == "frauen")
+
+print(frau_correlation)
+
+
+
+```
+
+Turkish:
+
+```{r}
+
+  word_freq <- dfm_text |> 
+  convert(to = "data.frame") |> 
+  gather(key = "word", value = "frequency") |> 
+  filter(frequency > 0) |> 
+  arrange(desc(frequency)) |> 
+  mutate(frequency = as.numeric(frequency)) |>
+  filter(!is.na(frequency)) 
+  
+
+
+word_freq <- word_freq |> 
+  slice(-1:-15) |> 
+  filter(!word %in% turkish_stops) |> 
+  filter(!word %in% c("bi", "mi", "he", "senle", "benle", "şeyini", "neydi", "çoksöyle"))
+
+  print(word_freq)
+```
+
+```{r}
+sentiments_nrc <- get_sentiments("nrc")
+
+sentiment_analysis_nrc <- top_artists_tracks_tr_atomic %>%
+  unnest_tokens(word, lyrics) %>%  # Tokenize the lyrics to get individual words
+  filter(!word %in% turkish_stops) %>%  # Exclude stopwords
+  inner_join(sentiments_nrc, by = "word") %>%
+  count(sentiment, sort = TRUE)  # Count instances of each sentiment
+
+# Show the counts of emotions
+print(sentiment_analysis_nrc)
+
+```
+
+#### Visualizing
+
+```{r}
+
+ggplot(sentiment_analysis_nrc, aes(x = reorder(sentiment, n), y = n, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +  # Use a minimal theme for better aesthetics
+  labs(title = "Emotion Analysis of Turkish Lyrics", x = "Emotion", y = "Frequency") +
+  coord_flip()
+```
+
+```{r}
+ggplot(sentiment_analysis_nrc, aes(x = "", y = n, fill = sentiment)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Total Emotion Counts in Turkish Lyrics", x = "Emotions", y = "Frequency") +
+  scale_fill_brewer(palette = "Set3")  # Use a color palette for better visuals
+
+```
+## Improved Visualization: Word Cloud in the Shape of Spain
+
+```{r}
+
+# Clean and prepare word frequency data
+word_freq_es <- word_freq_es %>%
+  filter(!is.na(word) & word != "NA") %>%
+  filter(!word %in% c("si", "ah", "oh", "ala", "eh", "verso", 
+                      "estribillo", "pa", "quiere", "quiero", 
+                      "woh", "morad", "sé", "uh", "pone", 
+                      "ser", "doy", "t'u", "s'e", "vo'a", 
+                      "jc", "to", "ere", "ahah", "voa")) %>%
+  arrange(desc(n)) %>%
+  head(200)  # Keep top 200 words
+
+# Create data frame with the required structure
+# Ensure column names match exactly what we'll use in e_charts
+word_freq_df <- data.frame(
+  word = word_freq_es$word,
+  freq = word_freq_es$n,
+  stringsAsFactors = FALSE
+)
+
+# Print first few rows to verify data structure
+print(head(word_freq_df))
+
+```
